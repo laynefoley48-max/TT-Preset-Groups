@@ -1,12 +1,12 @@
 /**
- * 预设分组 / Preset Groups v0.2.12
+ * 预设分组 / Preset Groups v0.2.13
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
 const SLUG = 'tt_preset_groups_v1';
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 const CLASSIFICATION_ALGORITHM_VERSION = 2;
-const COLLAPSE_DEFAULTS_VERSION = 4;
+const COLLAPSE_DEFAULTS_VERSION = 5;
 const $id = (id) => document.getElementById(id);
 const text = (tag, content, cls = '') => {
     const n = document.createElement(tag);
@@ -152,6 +152,7 @@ const ui = {
     confirmOpen: false, getCurrentPresetBody: null, getPresetApplicationPromise: null, lastSnapshot: null,
     refreshQueued: false,
     pendingPanelFocus: null,
+    pinnedEmptyGroupId: null, // Keep a just-edited source group visible until leaving the tab.
     floating: null,
     drawerModeSelect: null,
     sortMode: false,
@@ -923,6 +924,7 @@ function openPanel() {
 }
 function closePanel() {
     stopAutoCollapseTimer();
+    ui.pinnedEmptyGroupId = null;
     if (ui.panel) ui.panel.hidden = true;
     ui.panelOpen = false; document.body.classList.remove('pg-panel-visible');
     scheduleFloatingTuck();
@@ -944,7 +946,8 @@ function createPanel() {
         if (e.key === 'Escape' && ui.panelOpen && !ui.confirmOpen) closePanel();
     });
 }
-function showGroupsEditor(name) {
+function showGroupsEditor(name, sourceGroupId = null) {
+    const sourceIsRealGroup = ui.data.groups.some(group => group.id === sourceGroupId);
     const scrim = text('div', '', 'pg-confirm-backdrop');
     scrim.dataset.pgTheme = ui.data.theme || 'follow';
     const dialog = text('div', '', 'pg-editor-dialog');
@@ -1019,8 +1022,9 @@ function showGroupsEditor(name) {
         const changed = addedGroupIds.length > 0 || removedGroupIds.length > 0;
 
         for (const id of addedGroupIds) {
-            // Put the just-assigned preset at the top and open its destination group.
-            ui.data.collapsed[id] = false;
+            // New membership stays first; opening the destination must not steal focus
+            // when the edit was initiated from an existing source group.
+            if (!sourceIsRealGroup) ui.data.collapsed[id] = false;
             const old = ui.data.presetOrder[id] || [];
             ui.data.presetOrder[id] = [name, ...old.filter(item => item !== name)];
         }
@@ -1030,15 +1034,23 @@ function showGroupsEditor(name) {
             ui.data.manualOverrides[name] = true;
 
             if (['all', 'groups'].includes(ui.tab)) {
-                const targetGroupId = addedGroupIds[0]
-                    || next[0]
-                    || (ui.tab === 'groups' ? '__uncategorized__' : '__independent__');
-                ui.data.collapsed[targetGroupId] = false;
-                ui.pendingPanelFocus = {
-                    tab: ui.tab,
-                    groupId: targetGroupId,
-                    presetName: name,
-                };
+                if (sourceIsRealGroup) {
+                    // A -> B: remain at A, even if the moved preset is now only in B.
+                    ui.data.collapsed[sourceGroupId] = false;
+                    ui.pinnedEmptyGroupId = sourceGroupId;
+                    ui.pendingPanelFocus = { tab: ui.tab, groupId: sourceGroupId };
+                } else {
+                    // An ungrouped/favorites-origin edit can still reveal its destination.
+                    const targetGroupId = addedGroupIds[0]
+                        || next[0]
+                        || (ui.tab === 'groups' ? '__uncategorized__' : '__independent__');
+                    ui.data.collapsed[targetGroupId] = false;
+                    ui.pendingPanelFocus = {
+                        tab: ui.tab,
+                        groupId: targetGroupId,
+                        presetName: name,
+                    };
+                }
             }
         }
 
@@ -1287,7 +1299,7 @@ function makePresetRow(name, compact = false, groupId = null) {
         rename.setAttribute('aria-label', `重命名预设：${name}`);
         row.append(rename);
     }
-    if (!compact) row.append(htmlButton('分组', () => showGroupsEditor(name), 'pg-row-assign'));
+    if (!compact) row.append(htmlButton('分组', () => showGroupsEditor(name, groupId), 'pg-row-assign'));
     return row;
 }
 function groupCard(group, list, headingRight = '') {
@@ -1308,7 +1320,7 @@ function groupCard(group, list, headingRight = '') {
         return body;
     };
     const head = htmlButton('', () => {
-        collapsed = !collapsed; ui.data.collapsed[group.id] = !collapsed; save();
+        collapsed = !collapsed; ui.data.collapsed[group.id] = collapsed; save();
         head.firstElementChild.textContent = `${collapsed ? '▸' : '▾'} ${group.name}`;
         head.setAttribute('aria-expanded', String(!collapsed));
         if (collapsed) section.querySelector(':scope > .pg-series-body')?.remove();
@@ -1426,21 +1438,15 @@ function showGroupMemberPicker(group) {
         }
 
         ui.data.collapsed[group.id] = false;
+        ui.pinnedEmptyGroupId = group.id;
         if (addedNames.length) {
             ui.pendingPanelFocus = {
                 tab: ui.tab,
                 groupId: group.id,
                 presetName: addedNames[0],
             };
-        } else if (becameUnassigned.length) {
-            const targetId = ui.tab === 'groups' ? '__uncategorized__' : '__independent__';
-            ui.data.collapsed[targetId] = false;
-            ui.pendingPanelFocus = {
-                tab: ui.tab,
-                groupId: targetId,
-                presetName: becameUnassigned[0],
-            };
         } else if (removedNames.length) {
+            // Removing the last member should not jump to "未分类" or another group.
             ui.pendingPanelFocus = { tab: ui.tab, groupId: group.id };
         }
 
@@ -1614,6 +1620,7 @@ function renderPanel() {
     const tabs = text('div', '', 'pg-tabs');
     for (const [key, label] of [['all','全部'],['fav','收藏'],['groups','分类']]) {
         tabs.append(htmlButton(label, () => {
+            if (ui.tab !== key) ui.pinnedEmptyGroupId = null;
             ui.tab = key;
             for (const button of tabs.children) button.classList.toggle('is-selected', button.dataset.tab === key);
             renderPanelContent();
@@ -1627,7 +1634,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    const version = text('small', 'v0.2.12', 'pg-footer-version');
+    const version = text('small', 'v0.2.13', 'pg-footer-version');
     foot.append(label, version); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
@@ -1637,7 +1644,7 @@ function currentAllGroupIds() {
     const grouped = new Set();
     for (const group of sortGroups()) {
         const members = allNames().filter(name => membersFor(name).includes(group.id));
-        if (ui.tab === 'groups' || members.length) ids.push(group.id);
+        if (ui.tab === 'groups' || members.length || group.id === ui.pinnedEmptyGroupId) ids.push(group.id);
         for (const name of members) grouped.add(name);
     }
     if (ui.tab === 'groups') ids.push('__uncategorized__');
@@ -1772,7 +1779,7 @@ function renderPanelContent(scrollAnchor = null) {
         const grouped = new Set();
         for (const group of sortGroups()) {
             const members = names.filter(name => membersFor(name).includes(group.id));
-            if (!members.length) continue;
+            if (!members.length && group.id !== ui.pinnedEmptyGroupId) continue;
             for (const name of members) grouped.add(name);
             content.append(groupCard(group, members));
         }
@@ -2123,7 +2130,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.12 已加载');
+    console.info('[预设分组] v0.2.13 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
