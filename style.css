@@ -179,3 +179,74 @@
   #pg-quick .pg-filter-list { max-height:154px; }
   #pg-floating { width:40px; height:40px; }
 }
+
+
+/* Quick-filter group pagination: compact controls share the existing helper row. */
+#pg-quick .pg-quick-grid {
+  grid-template-rows: repeat(3, minmax(60px, auto));
+  min-height: 214px;
+  align-content: start;
+}
+#pg-quick .pg-quick-footer {
+  min-height: 30px;
+  padding: 0 10px 8px;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+}
+#pg-quick .pg-quick-footer > small {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 10px;
+}
+#pg-quick .pg-quick-pagination {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+#pg-quick .pg-page-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  min-width: 21px;
+  height: 21px;
+  min-height: 21px;
+  padding: 0;
+  border: 1px solid var(--pg-border);
+  border-radius: 4px;
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+}
+#pg-quick .pg-page-button:disabled {
+  opacity: .28;
+  cursor: default;
+}
+#pg-quick .pg-page-indicator {
+  min-width: 27px;
+  text-align: center;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: .72;
+}
+#pg-quick .pg-quick-footer .pg-text-btn {
+  flex: 0 0 auto;
+  padding: 3px 4px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+@media (max-width:480px) {
+  #pg-quick .pg-quick-grid { min-height: 202px; grid-template-rows: repeat(3, minmax(56px, auto)); }
+  #pg-quick .pg-quick-footer { gap: 3px; }
+  #pg-quick .pg-quick-footer > small { font-size: 9px; }
+  #pg-quick .pg-page-button { width:20px; min-width:20px; height:20px; min-height:20px; }
+}
