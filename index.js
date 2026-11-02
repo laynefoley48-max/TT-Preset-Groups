@@ -155,6 +155,7 @@ const ui = {
     quickPage: 0,
     autoCollapseTimer: null,
     floatingTuckTimer: null,
+    floatingResizeHandler: null,
     needsCollapseReset: false,
     needsClassificationRebuild: false,
 };
@@ -1283,7 +1284,6 @@ function mountFloating() {
         try { ball.setPointerCapture(pointer); } catch {}
         // Keep a tucked ball tucked on pointerdown. A tap must reach click;
         // only a real drag expands it, preventing the former two-tap behavior.
-        event.preventDefault();
     });
 
     ball.addEventListener('pointermove', event => {
@@ -1391,7 +1391,7 @@ function mountFloating() {
         ball.style.top = `${nextTop}px`;
         ui.data.floatingPosition = { left: nextLeft, top: nextTop };
         save();
-        if (ui.data.floatingSide) tuckFloating();
+        if (ui.data.floatingSide && !ui.panelOpen) tuckFloating();
     };
     window.addEventListener('resize', ui.floatingResizeHandler, { passive: true });
     applyTheme();
