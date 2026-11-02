@@ -1,0 +1,11 @@
+{
+  "display_name": "预设分组",
+  "loading_order": 50,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Community",
+  "version": "0.1.0",
+  "auto_update": false
+}
