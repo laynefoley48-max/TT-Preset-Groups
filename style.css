@@ -1,4 +1,4 @@
-/* 预设分组 0.2.2: native drawer, fixed themes, auto collapse and floating tuck */
+/* 预设分组 0.2.3: auto-snapping floating ball, direct sorting and warm fixed theme */
 #pg-quick, #pg-panel, #pg-confirm, .pg-confirm-backdrop {
   --pg-text: var(--SmartThemeBodyColor, #e6e2de);
   --pg-bg: var(--SmartThemeBlurTintColor, #242320);
