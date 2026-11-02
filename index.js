@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.11
+ * 预设分组 / Preset Groups v0.2.12
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -134,6 +134,7 @@ const defaults = () => ({
     theme: 'follow',
     floatingEnabled: true,
     floatingEnabledUserSet: false,
+    launcherMode: 'both', // 'floating' | 'menu' | 'both'
     floatingPosition: null,
     presetOrder: {},
     newPresets: [],
@@ -152,7 +153,7 @@ const ui = {
     refreshQueued: false,
     pendingPanelFocus: null,
     floating: null,
-    drawerCheckbox: null,
+    drawerModeSelect: null,
     sortMode: false,
     quickPage: 0,
     autoCollapseTimer: null,
@@ -186,6 +187,7 @@ function getData() {
     const bag = ui.ctx.extensionSettings;
     if (!bag[SLUG] || typeof bag[SLUG] !== 'object') bag[SLUG] = defaults();
     const stored = bag[SLUG];
+    const hadLauncherMode = Object.prototype.hasOwnProperty.call(stored, 'launcherMode');
     const migrateFloatingDefault = !Object.prototype.hasOwnProperty.call(stored, 'floatingEnabledUserSet');
     ui.needsCollapseReset = Number(stored.collapseDefaultsVersion || 0) < COLLAPSE_DEFAULTS_VERSION;
     ui.needsClassificationRebuild = Number(stored.classificationAlgorithmVersion || 0) < CLASSIFICATION_ALGORITHM_VERSION;
@@ -197,6 +199,12 @@ function getData() {
         stored.floatingEnabled = true;
         stored.floatingEnabledUserSet = false;
     }
+    // Previous versions only provided a "show floating ball" checkbox.
+    // Preserve that choice; the original menu shortcut was always available.
+    if (!hadLauncherMode || !['floating', 'menu', 'both'].includes(stored.launcherMode)) {
+        stored.launcherMode = stored.floatingEnabled ? 'both' : 'menu';
+    }
+    stored.floatingEnabled = stored.launcherMode !== 'menu';
     if (!stored.collapsed || typeof stored.collapsed !== 'object') stored.collapsed = {};
     if (!stored.manualOverrides || typeof stored.manualOverrides !== 'object') stored.manualOverrides = {};
     if (!stored.memberships || typeof stored.memberships !== 'object') stored.memberships = {};
@@ -1619,7 +1627,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    const version = text('small', 'v0.2.11', 'pg-footer-version');
+    const version = text('small', 'v0.2.12', 'pg-footer-version');
     foot.append(label, version); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
@@ -1804,7 +1812,7 @@ function clampFloatingLeft(left, width) {
     return Math.max(4, Math.min(Math.max(4, window.innerWidth - width - 4), left));
 }
 function mountFloating() {
-    if (!ui.data?.floatingEnabled) {
+    if (!['floating', 'both'].includes(ui.data?.launcherMode)) {
         clearFloatingTuckTimer();
         if (ui.floatingResizeHandler) {
             window.removeEventListener('resize', ui.floatingResizeHandler);
@@ -1977,33 +1985,91 @@ function mountMenu() {
         header.append(text('div', '', 'inline-drawer-icon fa-solid fa-circle-chevron-down down'));
         const content = text('div', '', 'inline-drawer-content');
         const controls = text('div', '', 'flex-container flexFlowColumn');
-        const floatingLabel = text('label', '', 'checkbox_label');
-        const floatingText = text('span', '显示悬浮球');
-        const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = !!ui.data.floatingEnabled;
-        checkbox.addEventListener('change', () => {
-            ui.data.floatingEnabled = checkbox.checked;
+
+        const modeRow = text('label', '', 'pg-entry-mode-row');
+        modeRow.append(text('span', '打开位置'));
+        const modeSelect = document.createElement('select');
+        modeSelect.id = 'pg-entry-mode-select';
+        modeSelect.className = 'text_pole pg-entry-mode-select';
+        modeSelect.setAttribute('aria-label', '预设分组打开位置');
+        for (const [value, label] of [
+            ['floating', '悬浮球'],
+            ['menu', '魔法棒'],
+            ['both', '悬浮球 + 魔法棒'],
+        ]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            modeSelect.append(option);
+        }
+        modeSelect.value = ui.data.launcherMode;
+        modeSelect.addEventListener('change', () => {
+            if (!['floating', 'menu', 'both'].includes(modeSelect.value)) return;
+            ui.data.launcherMode = modeSelect.value;
+            // Keep the former floatingEnabled field synchronized for upgrades.
+            ui.data.floatingEnabled = modeSelect.value !== 'menu';
             ui.data.floatingEnabledUserSet = true;
-            save(); mountFloating();
+            save();
+            mountFloating();
+            mountMenu();
         });
-        floatingLabel.append(floatingText, checkbox);
-        const open = text('div', '打开预设分组', 'menu_button'); open.tabIndex = 0; open.setAttribute('role', 'button');
+        modeRow.append(modeSelect);
+
+        const open = text('div', '打开预设分组', 'menu_button');
+        open.tabIndex = 0;
+        open.setAttribute('role', 'button');
         open.addEventListener('click', togglePanel);
-        open.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); togglePanel(); } });
-        controls.append(floatingLabel, open); content.append(controls);
+        open.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                togglePanel();
+            }
+        });
+        controls.append(modeRow, open);
+        content.append(controls);
         drawer.append(header, content); root.append(drawer); place.append(root);
     }
-    ui.drawerCheckbox = root?.querySelector('input[type="checkbox"]') || null;
-    if (ui.drawerCheckbox) ui.drawerCheckbox.checked = !!ui.data.floatingEnabled;
+
+    ui.drawerModeSelect = root?.querySelector('#pg-entry-mode-select') || null;
+    if (ui.drawerModeSelect && ui.drawerModeSelect.value !== ui.data.launcherMode)
+        ui.drawerModeSelect.value = ui.data.launcherMode;
+
+    // The magic-wand menu itself is populated asynchronously in standard ST.
+    // Only our shortcut is managed, never any other extension's entries.
     const menu = $id('extensionsMenu');
-    if (menu && !$id('pg-menu-entry')) {
-        const container = text('div', '', 'extension_container'); container.id = 'pg-menu-container';
+    let container = $id('pg-menu-container');
+    if (!['menu', 'both'].includes(ui.data.launcherMode)) {
+        container?.remove();
+        return;
+    }
+    if (!menu) return;
+    if (container && container.parentElement !== menu) {
+        container.remove();
+        container = null;
+    }
+    if (container && !container.querySelector('#pg-menu-entry')) {
+        container.remove();
+        container = null;
+    }
+    if (!container) {
+        container = text('div', '', 'extension_container');
+        container.id = 'pg-menu-container';
         const entry = text('div', '', 'list-group-item flex-container flexGap5');
-        entry.id = 'pg-menu-entry'; entry.tabIndex = 0; entry.setAttribute('role', 'button'); entry.title = '打开预设分组';
+        entry.id = 'pg-menu-entry';
+        entry.tabIndex = 0;
+        entry.setAttribute('role', 'button');
+        entry.title = '打开预设分组';
         entry.append(text('div', '', 'fa-fw fa-solid fa-layer-group extensionsMenuExtensionButton'));
         entry.append(text('span', '预设分组'));
         entry.addEventListener('click', togglePanel);
-        entry.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); togglePanel(); } });
-        container.append(entry); menu.append(container);
+        entry.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                togglePanel();
+            }
+        });
+        container.append(entry);
+        menu.append(container);
     }
 }
 function refreshAll() {
@@ -2057,7 +2123,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.11 已加载');
+    console.info('[预设分组] v0.2.12 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
