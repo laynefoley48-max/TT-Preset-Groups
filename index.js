@@ -1122,7 +1122,7 @@ async function renamePresetWithoutSwitching(oldName, newName) {
 function showPresetRenameDialog(name) {
     showTextEditDialog('重命名预设', name, '输入新的预设名称', async newName => {
         const foldName = value => String(value).normalize('NFD')
-            .replace(/[\\u0300-\\u036f]/g, '').toLocaleLowerCase();
+            .replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase();
         if (foldName(newName) === foldName(name)) return true;
         const duplicate = allNames().find(item =>
             item !== name && foldName(item) === foldName(newName));
