@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.14
+ * 预设分组 / Preset Groups v0.2.15
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -244,10 +244,23 @@ function membersFor(name) {
     const ids = ui.data.memberships[name];
     return Array.isArray(ids) ? ids.filter(id => ui.data.groups.some(g => g.id === id)) : [];
 }
-function matchesFilter(name) {
-    if (!ui.data.selectedGroups.length) return true;
-    const ids = membersFor(name);
-    return ui.data.selectedGroups.some(id => id === '__uncategorized__' ? ids.length === 0 : ids.includes(id));
+function quickFilteredPresetNames() {
+    // Use the exact same per-group preset order as the independent panel.
+    // Multi-select uses the visible group order and keeps each preset once.
+    const selected = new Set(ui.data.selectedGroups);
+    if (!selected.size) return [];
+    const ids = sortGroups().map(group => group.id).filter(id => selected.has(id));
+    if (selected.has('__uncategorized__')) ids.push('__uncategorized__');
+    const names = [];
+    const seen = new Set();
+    for (const id of ids) {
+        for (const name of sortPresetNames(id, presetMembersForGroup(id))) {
+            if (seen.has(name)) continue;
+            seen.add(name);
+            names.push(name);
+        }
+    }
+    return names;
 }
 function syncGroupOrder() {
     const ids = new Set(ui.data.groups.map(g => g.id));
@@ -845,7 +858,7 @@ function renderQuick() {
 
     if (ui.data.selectedGroups.length) {
         const results = text('div', '', 'pg-filter-results');
-        const names = allNames().filter(matchesFilter).sort(versionCompare);
+        const names = quickFilteredPresetNames();
         results.append(text('div', `筛选结果 · 共 ${names.length} 个预设`, 'pg-filter-label'));
         const list = text('div', '', 'pg-filter-list');
         for (const name of names) {
@@ -1666,7 +1679,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    const version = text('small', 'v0.2.14', 'pg-footer-version');
+    const version = text('small', 'v0.2.15', 'pg-footer-version');
     foot.append(label, version); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
@@ -2167,7 +2180,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.14 已加载');
+    console.info('[预设分组] v0.2.15 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
