@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.1.1
+ * 预设分组 / Preset Groups v0.1.2
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -528,7 +528,7 @@ function makePresetRow(name, compact = false) {
     const star = htmlButton(ui.data.favorites.includes(name) ? '★' : '☆', () => {
         const s = new Set(ui.data.favorites);
         if (s.has(name)) s.delete(name); else s.add(name);
-        ui.data.favorites = [...s]; save(); renderPanel();
+        ui.data.favorites = [...s]; save(); renderPanelContent();
     }, `pg-star${ui.data.favorites.includes(name) ? ' is-favorite' : ''}`);
     star.title = ui.data.favorites.includes(name) ? '取消收藏' : '收藏预设';
     row.append(star);
@@ -539,21 +539,30 @@ function groupCard(group, list, headingRight = '') {
     const section = text('section', '', 'pg-series-card');
     const sortable = ui.data.groups.some(g => g.id === group.id);
     if (sortable) { section.classList.add('pg-sortable-card'); section.dataset.groupId = group.id; }
-    const collapsed = ui.data.collapsed[group.id] !== false;
+    let collapsed = ui.data.collapsed[group.id] !== false;
     const top = text('div', '', 'pg-series-top');
     if (sortable) top.append(makeDragHandle(group));
-    const head = htmlButton('', () => {
-        ui.data.collapsed[group.id] = !collapsed; save(); renderPanel();
-    }, 'pg-series-heading');
-    head.append(text('span', `${collapsed ? '▸' : '▾'} ${group.name}`));
-    head.append(text('span', headingRight || `${list.length} 项`, 'pg-count'));
-    top.append(head); section.append(top);
-    if (!collapsed) {
+    // Expand/collapse only this group's body: never recreate the scroll container.
+    const makeBody = () => {
         const body = text('div', '', 'pg-series-body');
         for (const name of list) body.append(makePresetRow(name));
         if (!list.length) body.append(text('p', '这个分组还没有预设。可以点「选择预设」添加。', 'pg-empty'));
-        section.append(body);
-    }
+        return body;
+    };
+    const head = htmlButton('', () => {
+        collapsed = !collapsed;
+        ui.data.collapsed[group.id] = collapsed;
+        save();
+        head.firstElementChild.textContent = `${collapsed ? '▸' : '▾'} ${group.name}`;
+        head.setAttribute('aria-expanded', String(!collapsed));
+        if (collapsed) section.querySelector(':scope > .pg-series-body')?.remove();
+        else section.append(makeBody());
+    }, 'pg-series-heading');
+    head.setAttribute('aria-expanded', String(!collapsed));
+    head.append(text('span', `${collapsed ? '▸' : '▾'} ${group.name}`));
+    head.append(text('span', headingRight || `${list.length} 项`, 'pg-count'));
+    top.append(head); section.append(top);
+    if (!collapsed) section.append(makeBody());
     return section;
 }
 function renameGroup(group) {
@@ -627,6 +636,8 @@ function showGroupMemberPicker(group) {
 }
 function renderPanel() {
     if (!ui.panel || !ui.panelOpen) return;
+    // Preserve internal scrolling across automatic refreshes and preset switches.
+    const previousTop = $id('pg-panel-content')?.scrollTop ?? 0;
     const win = ui.panel.querySelector('.pg-window');
     win.replaceChildren();
     const head = text('header', '', 'pg-head');
@@ -660,9 +671,11 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.1.1'));
+    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.1.2'));
     win.append(foot);
     renderPanelContent();
+    const rebuilt = $id('pg-panel-content');
+    if (rebuilt) rebuilt.scrollTop = previousTop;
 }
 function renderPanelContent() {
     const content = $id('pg-panel-content');
@@ -793,7 +806,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.1.1 已加载');
+    console.info('[预设分组] v0.1.2 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
