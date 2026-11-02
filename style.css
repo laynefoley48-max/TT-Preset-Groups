@@ -554,8 +554,25 @@
 
 
 #pg-quick .pg-quick-pagination-row {
-  display:flex; align-items:center; justify-content:flex-end; gap:7px;
+  display:flex; align-items:center; justify-content:space-between; gap:7px;
   min-height:27px; padding:0 10px 7px;
+}
+#pg-quick .pg-quick-multi {
+  display:inline-flex; align-items:center; flex:0 0 auto; gap:5px;
+  min-height:22px; margin:0; cursor:pointer; white-space:nowrap;
+  color:var(--pg-muted); font-size:11px; line-height:1.2;
+}
+#pg-quick .pg-quick-multi input {
+  appearance:auto; width:13px; height:13px; min-width:13px; min-height:13px;
+  margin:0; padding:0; flex:0 0 13px; accent-color:var(--pg-accent);
+}
+#pg-quick .pg-quick-multi input:checked + span { color:var(--pg-text); }
+#pg-quick .pg-quick-multi input:focus-visible {
+  outline:2px solid var(--pg-accent); outline-offset:2px;
+}
+#pg-quick .pg-quick-pages {
+  display:inline-flex; align-items:center; justify-content:flex-end; gap:7px;
+  flex:0 0 auto;
 }
 #pg-quick .pg-pagination-label { font-size:10px; margin-right:1px; }
 #pg-quick .pg-quick-footer { min-height:30px; }
