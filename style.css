@@ -107,6 +107,16 @@
 #pg-quick .pg-filter-preset.is-current { border-color:var(--pg-accent); font-weight:600; }
 #pg-panel .pg-series-top { display:flex; align-items:stretch; width:100%; }
 #pg-panel .pg-series-top .pg-series-heading { flex:1; min-width:0; }
+#pg-panel .pg-group-rename,
+#pg-panel .pg-row-rename {
+  flex:0 0 26px; width:26px; height:26px; padding:0; border:0;
+  border-radius:5px; background:transparent; opacity:.58;
+  font-size:15px; line-height:1; text-align:center;
+}
+#pg-panel .pg-group-rename { align-self:center; margin:0 6px 0 0; }
+#pg-panel .pg-row-rename { font-size:16px; }
+#pg-panel .pg-group-rename:hover,
+#pg-panel .pg-row-rename:hover { opacity:1; background:var(--pg-surface-2); }
 #pg-panel .pg-drag-handle { flex:0 0 22px; width:22px; min-width:22px; margin:0 0 0 -2px; padding:2px 0; border:0; background:transparent; font-size:18px; line-height:1; opacity:.58; cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
 #pg-panel .pg-drag-handle:active { cursor:grabbing; }
 #pg-panel .pg-sortable-card.pg-dragging { opacity:.6; }
@@ -125,8 +135,18 @@
 .pg-member-picker .pg-picker-list { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; }
 .pg-member-picker .pg-checkline span { min-width:0; overflow-wrap:anywhere; }
 .pg-member-picker .pg-picker-actions { flex:0 0 auto; display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:12px; }
+.pg-name-editor { width:min(360px,100%); }
+.pg-name-editor .pg-name-editor-input {
+  display:block; width:100%; min-width:0; margin:0 0 14px; padding:10px 11px;
+  border:1px solid var(--pg-border); border-radius:6px; color:inherit;
+  background:transparent; font:inherit; font-size:14px;
+}
+.pg-name-editor .pg-name-editor-actions {
+  display:flex; justify-content:flex-end; gap:8px;
+}
+.pg-name-editor .pg-name-editor-actions button { min-width:72px; }
 
-/* 0.2.4: neutral gray light theme, help guide and direct drag restoration. */
+/* 0.2.6: inline rename controls and scroll-anchor restoration. */
 #pg-quick, #pg-panel, .pg-confirm-backdrop, #pg-floating {
   --pg-surface-1: color-mix(in srgb, var(--pg-text) 4%, var(--pg-bg));
   --pg-surface-2: color-mix(in srgb, var(--pg-text) 8%, var(--pg-bg));
