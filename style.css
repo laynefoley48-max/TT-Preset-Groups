@@ -1,4 +1,4 @@
-/* 预设分组 0.1.1: mobile-friendly, scoped CSS */
+/* 预设分组 0.1.2: mobile-friendly, scoped CSS */
 #pg-quick, #pg-panel, #pg-confirm, .pg-confirm-backdrop {
   --pg-text: var(--SmartThemeBodyColor, #e6e2de);
   --pg-bg: var(--SmartThemeBlurTintColor, #242320);
@@ -81,7 +81,7 @@
   #pg-quick .pg-group-tile { min-height: 56px; }
 }
 
-/* v0.1.1 compatibility: native dropdown must remain untouched. */
+/* v0.1.2 compatibility: native dropdown must remain untouched. */
 #settings_preset_openai.pg-source-hidden { display: revert !important; }
 #pg-quick .pg-filter-results { border-top:1px solid var(--pg-border); padding:9px 10px 5px; }
 #pg-quick .pg-filter-label { opacity:.8; font-size:11px; margin:0 0 7px; }
