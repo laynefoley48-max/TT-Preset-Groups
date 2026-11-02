@@ -453,10 +453,17 @@ function acceptPendingMatch(id) {
     const match = (ui.data.pendingMatches || []).find(item => item.id === id);
     if (!match) return;
     const common = match.common || commonSubstring(match.name, match.otherName || '');
-    if (match.groupId && ui.data.groups.some(group => group.id === match.groupId)) {
-        const group = ui.data.groups.find(item => item.id === match.groupId);
+    const fallbackGroupId = match.otherName
+        ? membersFor(match.otherName).find(groupId =>
+            ui.data.groups.some(group => group.id === groupId && group.type === 'auto'))
+        : null;
+    const targetGroupId = (match.groupId && ui.data.groups.some(group => group.id === match.groupId))
+        ? match.groupId : fallbackGroupId;
+
+    if (targetGroupId) {
+        const group = ui.data.groups.find(item => item.id === targetGroupId);
         group.confirmed = true;
-        const ids = new Set(membersFor(match.name)); ids.add(match.groupId);
+        const ids = new Set(membersFor(match.name)); ids.add(targetGroupId);
         ui.data.memberships[match.name] = [...ids];
         ui.data.manualOverrides[match.name] = true;
         if (match.otherName) ui.data.manualOverrides[match.otherName] = true;
@@ -469,8 +476,10 @@ function acceptPendingMatch(id) {
             confirmed: true,
         };
         ui.data.groups.push(group);
-        ui.data.memberships[match.name] = [group.id];
-        ui.data.memberships[match.otherName] = [group.id];
+        const nameIds = new Set(membersFor(match.name)); nameIds.add(group.id);
+        const otherIds = new Set(membersFor(match.otherName)); otherIds.add(group.id);
+        ui.data.memberships[match.name] = [...nameIds];
+        ui.data.memberships[match.otherName] = [...otherIds];
         ui.data.manualOverrides[match.name] = true;
         ui.data.manualOverrides[match.otherName] = true;
     }
@@ -1130,7 +1139,7 @@ function renderPanelContent() {
                 card.append(text('div', `${match.name}  ↔  ${other}`, 'pg-pending-title'));
                 const evidence = match.common ? `连续相同「${match.common}」 · ` : '';
                 const suffixNote = match.usedAmbiguousSuffix ? ' · 比较时尝试忽略末尾数字' : '';
-                card.append(text('small', `${evidence}名称相似度 ${(match.score * 100).toFixed(1).replace(/\\.0$/, '')}%${suffixNote}`, 'pg-pending-score'));
+                card.append(text('small', `${evidence}名称相似度 ${(match.score * 100).toFixed(1).replace(/\.0$/, '')}%${suffixNote}`, 'pg-pending-score'));
                 const actions = text('div', '', 'pg-pending-actions');
                 actions.append(htmlButton('合并为同系列', () => acceptPendingMatch(match.id), 'pg-primary'));
                 actions.append(htmlButton('不是同系列', () => ignorePendingMatch(match.id), 'pg-text-btn'));
@@ -1213,6 +1222,7 @@ function mountFloating() {
     });
     ball.addEventListener('pointerdown', event => {
         if (event.button !== 0 || pointer !== null) return;
+        clearFloatingTuckTimer();
         pointer = event.pointerId; moved = false;
         const rect = ball.getBoundingClientRect();
         const savedLeft = Number.isFinite(ui.data.floatingPosition?.left) ? ui.data.floatingPosition.left : rect.left;
