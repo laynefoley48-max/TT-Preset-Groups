@@ -150,6 +150,7 @@ const ui = {
     activeName: '', activeValue: '', busy: false, suppressNative: false,
     confirmOpen: false, getCurrentPresetBody: null, getPresetApplicationPromise: null, lastSnapshot: null,
     refreshQueued: false,
+    pendingPanelFocus: null,
     floating: null,
     drawerCheckbox: null,
     sortMode: false,
@@ -940,21 +941,45 @@ function showGroupsEditor(name) {
             delete ui.data.collapsed[group.id];
             delete ui.data.presetOrder[group.id];
         }
+
         const next = [...chosen].filter(id => ui.data.groups.some(group => group.id === id));
-        for (const id of next) {
-            if (!original.has(id)) ui.data.collapsed[id] = false;
-            if ((ui.data.newPresets || []).includes(name)) {
-                const old = ui.data.presetOrder[id] || [];
-                ui.data.presetOrder[id] = [name, ...old.filter(item => item !== name)];
+        const addedGroupIds = next.filter(id => !original.has(id));
+        const removedGroupIds = [...original].filter(id => !next.includes(id));
+        const changed = addedGroupIds.length > 0 || removedGroupIds.length > 0;
+
+        for (const id of addedGroupIds) {
+            // Put the just-assigned preset at the top and open its destination group.
+            ui.data.collapsed[id] = false;
+            const old = ui.data.presetOrder[id] || [];
+            ui.data.presetOrder[id] = [name, ...old.filter(item => item !== name)];
+        }
+
+        if (changed) {
+            ui.data.memberships[name] = next;
+            ui.data.manualOverrides[name] = true;
+
+            if (['all', 'groups'].includes(ui.tab)) {
+                const targetGroupId = addedGroupIds[0]
+                    || next[0]
+                    || (ui.tab === 'groups' ? '__uncategorized__' : '__independent__');
+                ui.data.collapsed[targetGroupId] = false;
+                ui.pendingPanelFocus = {
+                    tab: ui.tab,
+                    groupId: targetGroupId,
+                    presetName: name,
+                };
             }
         }
-        ui.data.memberships[name] = next;
-        ui.data.manualOverrides[name] = true;
+
         committed = true;
-        save(); scrim.remove(); refreshAll();
+        save();
+        scrim.remove();
+        if (changed) refreshAll();
     }, 'pg-cancel'));
     scrim.append(dialog); document.body.append(scrim);
-    scrim.addEventListener('click', e => { if (e.target === scrim) closeEditor(); });
+    scrim.addEventListener('click', event => {
+        if (event.target === scrim) closeEditor();
+    });
 }
 function showTextEditDialog(title, initialValue, placeholder, onSave) {
     const scrim = text('div', '', 'pg-confirm-backdrop');
@@ -1137,6 +1162,7 @@ function showPresetRenameDialog(name) {
 function makePresetRow(name, compact = false, groupId = null) {
     const row = text('div', '', 'pg-preset-row');
     row.dataset.pgScrollKey = `preset:${name}`;
+    if (groupId !== null && groupId !== undefined) row.dataset.pgGroupId = String(groupId);
     if (ui.sortMode && groupId) {
         row.classList.add('pg-sortable-preset'); row.dataset.presetName = name; row.dataset.groupId = groupId;
         row.append(makeDragHandle('preset', name, groupId));
@@ -1166,6 +1192,7 @@ function groupCard(group, list, headingRight = '') {
     const section = text('section', '', 'pg-series-card');
     const realGroup = ui.data.groups.some(item => item.id === group.id);
     section.dataset.pgScrollKey = `group:${group.id}`;
+    section.dataset.pgGroupId = String(group.id);
     if (realGroup) section.dataset.groupType = group.type || '';
     if (realGroup && ui.sortMode) { section.classList.add('pg-sortable-card'); section.dataset.groupId = group.id; }
     let collapsed = ui.data.collapsed[group.id] !== false;
@@ -1238,7 +1265,7 @@ function showGroupMemberPicker(group) {
     header.append(labels, htmlButton('×', () => scrim.remove(), 'pg-picker-x'));
     dialog.append(header);
     const all = allNames().sort(collator.compare);
-    const chosen = new Set(all.filter(n => membersFor(n).includes(group.id)));
+    const chosen = new Set(all.filter(name => membersFor(name).includes(group.id)));
     const search = document.createElement('input');
     search.type='search'; search.placeholder='搜索要添加的预设…'; search.className='pg-picker-search';
     dialog.append(search);
@@ -1246,41 +1273,76 @@ function showGroupMemberPicker(group) {
     const list = text('div', '', 'pg-picker-list'); dialog.append(list);
     function draw() {
         list.replaceChildren();
-        const names=all.filter(n => normalized(n).includes(normalized(search.value)));
+        const names = all.filter(name => normalized(name).includes(normalized(search.value)));
         info.textContent = `已选 ${chosen.size} / 共 ${all.length} 个预设`;
         for (const name of names) {
             const line = text('label', '', 'pg-checkline');
             const check = document.createElement('input'); check.type='checkbox';
-            check.checked=chosen.has(name);
+            check.checked = chosen.has(name);
             check.addEventListener('change', () => {
                 check.checked ? chosen.add(name) : chosen.delete(name);
                 info.textContent = `已选 ${chosen.size} / 共 ${all.length} 个预设`;
             });
-            line.append(check, text('span',name)); list.append(line);
+            line.append(check, text('span', name)); list.append(line);
         }
-        if (!names.length) list.append(text('p','没有匹配的预设。','pg-muted'));
+        if (!names.length) list.append(text('p', '没有匹配的预设。', 'pg-muted'));
     }
     search.addEventListener('input', draw); draw();
-    const actions=text('div','','pg-picker-actions');
+
+    const actions = text('div', '', 'pg-picker-actions');
     actions.append(htmlButton('取消', () => scrim.remove(), 'pg-secondary'));
     actions.append(htmlButton('保存分组', () => {
+        const addedNames = [];
+        const removedNames = [];
+        const becameUnassigned = [];
         for (const name of all) {
-            const before=membersFor(name).includes(group.id), after=chosen.has(name);
-            if (before===after) continue;
-            const ids=new Set(membersFor(name));
+            const before = membersFor(name).includes(group.id);
+            const after = chosen.has(name);
+            if (before === after) continue;
+            const ids = new Set(membersFor(name));
             after ? ids.add(group.id) : ids.delete(group.id);
-            ui.data.memberships[name]=[...ids];
-            if (after && (ui.data.newPresets || []).includes(name)) {
-                const old = ui.data.presetOrder[group.id] || [];
-                ui.data.presetOrder[group.id] = [name, ...old.filter(item => item !== name)];
+            ui.data.memberships[name] = [...ids];
+            ui.data.manualOverrides[name] = true;
+            if (after) addedNames.push(name);
+            else {
+                removedNames.push(name);
+                if (ids.size === 0) becameUnassigned.push(name);
             }
-            ui.data.manualOverrides[name]=true;
         }
-        if (chosen.size) ui.data.collapsed[group.id] = false;
+
+        if (addedNames.length) {
+            const old = ui.data.presetOrder[group.id] || [];
+            ui.data.presetOrder[group.id] = [
+                ...addedNames,
+                ...old.filter(name => !addedNames.includes(name)),
+            ];
+        }
+
+        ui.data.collapsed[group.id] = false;
+        if (addedNames.length) {
+            ui.pendingPanelFocus = {
+                tab: ui.tab,
+                groupId: group.id,
+                presetName: addedNames[0],
+            };
+        } else if (becameUnassigned.length) {
+            const targetId = ui.tab === 'groups' ? '__uncategorized__' : '__independent__';
+            ui.data.collapsed[targetId] = false;
+            ui.pendingPanelFocus = {
+                tab: ui.tab,
+                groupId: targetId,
+                presetName: becameUnassigned[0],
+            };
+        } else if (removedNames.length) {
+            ui.pendingPanelFocus = { tab: ui.tab, groupId: group.id };
+        }
+
         save(); scrim.remove(); refreshAll();
     }, 'pg-primary'));
     dialog.append(actions); scrim.append(dialog);
-    scrim.addEventListener('click',e=>{ if(e.target===scrim) scrim.remove(); });
+    scrim.addEventListener('click', event => {
+        if (event.target === scrim) scrim.remove();
+    });
 }
 function closeHelp() {
     if (ui.helpScrim) ui.helpScrim.remove();
@@ -1353,27 +1415,59 @@ function capturePanelScroll(content) {
     if (!content) return null;
     const top = content.scrollTop;
     const viewport = content.getBoundingClientRect();
-    const anchor = [...content.children].find(element =>
-        element.dataset.pgScrollKey && element.getBoundingClientRect().bottom > viewport.top + 1);
-    if (!anchor) return { top };
-    return {
-        top,
-        key: anchor.dataset.pgScrollKey,
-        offset: anchor.getBoundingClientRect().top - viewport.top,
-    };
+    const anchors = [...content.querySelectorAll('[data-pg-scroll-key]')]
+        .map(element => ({
+            key: element.dataset.pgScrollKey,
+            groupId: element.dataset.pgGroupId || null,
+            rect: element.getBoundingClientRect(),
+        }))
+        .filter(item => item.rect.bottom > viewport.top + 1 && item.rect.top < viewport.bottom - 1)
+        .sort((a, b) => Math.abs(a.rect.top - viewport.top) - Math.abs(b.rect.top - viewport.top))
+        .slice(0, 12)
+        .map(item => ({
+            key: item.key,
+            groupId: item.groupId,
+            offset: item.rect.top - viewport.top,
+        }));
+    return { top, anchors };
 }
-function restorePanelScroll(content, anchor) {
-    if (!content || !anchor) return;
-    if (anchor.key) {
-        const target = [...content.children].find(element => element.dataset.pgScrollKey === anchor.key);
-        if (target) {
-            const viewport = content.getBoundingClientRect();
-            const rect = target.getBoundingClientRect();
-            content.scrollTop = Math.max(0, content.scrollTop + rect.top - viewport.top - anchor.offset);
-            return;
-        }
+function restorePanelScroll(content, snapshot) {
+    if (!content || !snapshot) return;
+    const nodes = [...content.querySelectorAll('[data-pg-scroll-key]')];
+    for (const anchor of snapshot.anchors || []) {
+        const matches = nodes.filter(element => element.dataset.pgScrollKey === anchor.key);
+        const target = matches.find(element =>
+            anchor.groupId && element.dataset.pgGroupId === anchor.groupId) || matches[0];
+        if (!target) continue;
+        const viewport = content.getBoundingClientRect();
+        const rect = target.getBoundingClientRect();
+        content.scrollTop = Math.max(0, content.scrollTop + rect.top - viewport.top - anchor.offset);
+        return;
     }
-    content.scrollTop = anchor.top || 0;
+    content.scrollTop = snapshot.top || 0;
+}
+function applyPendingPanelFocus(content) {
+    const focus = ui.pendingPanelFocus;
+    if (!focus) return false;
+    ui.pendingPanelFocus = null;
+    if (focus.tab && focus.tab !== ui.tab) return false;
+
+    const nodes = [...content.querySelectorAll('[data-pg-scroll-key]')];
+    let target = null;
+    if (focus.presetName) {
+        const rows = nodes.filter(element => element.dataset.pgScrollKey === `preset:${focus.presetName}`);
+        target = rows.find(element =>
+            !focus.groupId || element.dataset.pgGroupId === String(focus.groupId)) || rows[0] || null;
+    }
+    if (!target && focus.groupId) {
+        target = nodes.find(element => element.dataset.pgScrollKey === `group:${focus.groupId}`) || null;
+    }
+    if (!target) return false;
+
+    const viewport = content.getBoundingClientRect();
+    const rect = target.getBoundingClientRect();
+    content.scrollTop = Math.max(0, content.scrollTop + rect.top - viewport.top - 12);
+    return true;
 }
 function renderPanel() {
     if (!ui.panel || !ui.panelOpen) return;
@@ -1426,7 +1520,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.6')); win.append(foot);
+    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.7')); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
 }
@@ -1578,7 +1672,7 @@ function renderPanelContent(scrollAnchor = null) {
         if (alone.length) content.append(groupCard({ id: '__independent__', name: '独立预设' }, alone));
         if (!names.length) content.append(text('p', '没有匹配的预设。', 'pg-empty'));
     }
-    restorePanelScroll(content, anchor);
+    if (!applyPendingPanelFocus(content)) restorePanelScroll(content, anchor);
     if (['all', 'groups'].includes(ui.tab)) resetAutoCollapseTimer();
     else stopAutoCollapseTimer();
 }
