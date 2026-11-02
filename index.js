@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.13
+ * 预设分组 / Preset Groups v0.2.14
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -157,6 +157,7 @@ const ui = {
     drawerModeSelect: null,
     sortMode: false,
     quickPage: 0,
+    quickMultiSelect: false, // The quick grid defaults to single-selection each session.
     autoCollapseTimer: null,
     floatingTuckTimer: null,
     floatingResizeHandler: null,
@@ -780,9 +781,18 @@ function renderQuick() {
     for (const group of pageGroups) {
         const selected = ui.data.selectedGroups.includes(group.id);
         const button = htmlButton(group.name, () => {
-            const selectedIds = new Set(ui.data.selectedGroups);
-            if (selectedIds.has(group.id)) selectedIds.delete(group.id); else selectedIds.add(group.id);
-            ui.data.selectedGroups = [...selectedIds]; save(); refreshAll();
+            const current = ui.data.selectedGroups;
+            if (ui.quickMultiSelect) {
+                // In multi-select mode a second click removes only this group.
+                ui.data.selectedGroups = selected
+                    ? current.filter(id => id !== group.id)
+                    : [...current, group.id];
+            } else {
+                // In the default mode, selecting another group replaces the filter.
+                // Clicking the one active group again clears the filter.
+                ui.data.selectedGroups = selected && current.length === 1 ? [] : [group.id];
+            }
+            save(); refreshAll();
         }, `pg-group-tile${selected ? ' is-active' : ''}`);
         button.title = group.name; button.setAttribute('aria-pressed', String(selected));
         const number = group.id === '__uncategorized__'
@@ -793,9 +803,28 @@ function renderQuick() {
     if (!groups.length) grid.append(text('p', '暂无分组，请在独立面板创建。', 'pg-muted'));
     ui.quick.append(grid);
 
+    // Keep selection mode in the slim row below the grid, alongside paging.
+    const row = text('div', '', 'pg-quick-pagination-row');
+    const multiLabel = text('label', '', 'pg-quick-multi');
+    const multiCheckbox = document.createElement('input');
+    multiCheckbox.type = 'checkbox';
+    multiCheckbox.checked = ui.quickMultiSelect;
+    multiCheckbox.setAttribute('aria-label', '多选分组');
+    multiCheckbox.addEventListener('change', () => {
+        ui.quickMultiSelect = multiCheckbox.checked;
+        if (!ui.quickMultiSelect && ui.data.selectedGroups.length > 1) {
+            // Leaving multi-select keeps only the most recently selected group.
+            ui.data.selectedGroups = ui.data.selectedGroups.slice(-1);
+            save(); refreshAll();
+        } else {
+            renderQuick();
+        }
+    });
+    multiLabel.append(multiCheckbox, text('span', '多选'));
+    row.append(multiLabel);
     if (pageCount > 1) {
-        const row = text('div', '', 'pg-quick-pagination-row');
-        row.append(text('small', '分组', 'pg-pagination-label'));
+        const pageGroup = text('div', '', 'pg-quick-pages');
+        pageGroup.append(text('small', '分组', 'pg-pagination-label'));
         const pagination = text('div', '', 'pg-quick-pagination');
         const previous = htmlButton('‹', () => {
             ui.quickPage = Math.max(0, ui.quickPage - 1); renderQuick();
@@ -810,8 +839,9 @@ function renderQuick() {
         next.disabled = ui.quickPage >= pageCount - 1;
         next.title = '下一页'; next.setAttribute('aria-label', '下一页');
         pagination.append(previous, indicator, next);
-        row.append(pagination); ui.quick.append(row);
+        pageGroup.append(pagination); row.append(pageGroup);
     }
+    ui.quick.append(row);
 
     if (ui.data.selectedGroups.length) {
         const results = text('div', '', 'pg-filter-results');
@@ -831,7 +861,9 @@ function renderQuick() {
     }
 
     const footer = text('div', '', 'pg-quick-footer');
-    footer.append(text('small', '多选取并集 · 同一预设不重复'));
+    footer.append(text('small', ui.quickMultiSelect
+        ? '多选取并集 · 同一预设不重复'
+        : '单选分组 · 再次点击取消筛选'));
     if (ui.data.selectedGroups.length) footer.append(htmlButton('清除筛选', () => {
         ui.data.selectedGroups = []; save(); refreshAll();
     }, 'pg-text-btn'));
@@ -1634,7 +1666,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    const version = text('small', 'v0.2.13', 'pg-footer-version');
+    const version = text('small', 'v0.2.14', 'pg-footer-version');
     foot.append(label, version); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
@@ -2088,6 +2120,11 @@ async function init() {
     }
     ui.ctx = SillyTavern.getContext();
     ui.data = getData();
+    if (ui.data.selectedGroups.length > 1) {
+        // Prior versions persisted multiple active filters; the new default is one.
+        ui.data.selectedGroups = ui.data.selectedGroups.slice(-1);
+        save();
+    }
     try {
         const openaiModule = await import('../../../openai.js');
         if (typeof openaiModule.getChatCompletionPreset === 'function')
@@ -2130,7 +2167,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.13 已加载');
+    console.info('[预设分组] v0.2.14 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
