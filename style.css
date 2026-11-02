@@ -157,11 +157,19 @@
 #pg-panel .pg-category-note,
 #pg-panel .pg-sort-hint,
 #pg-panel .pg-pending-score,
-#pg-panel .pg-panel-footer small {
+#pg-panel .pg-panel-footer small,
+#pg-panel .pg-empty,
+#pg-panel .pg-group-actions small,
+.pg-confirm-backdrop .pg-editor-name,
+.pg-confirm-backdrop .pg-picker-title p,
+.pg-confirm-backdrop .pg-picker-count,
+.pg-confirm-backdrop .pg-cancel {
   color:var(--pg-muted);
   opacity:1;
 }
+#pg-panel .pg-category-help { color:var(--pg-text); opacity:1; }
 #pg-quick .pg-muted, #pg-panel .pg-muted { color:var(--pg-muted); opacity:1; }
+#pg-quick .pg-text-btn, #pg-panel .pg-text-btn { opacity:1; }
 #pg-panel .pg-window { background:var(--pg-bg); }
 #pg-panel .pg-search { background:var(--pg-surface-1); }
 #pg-panel .pg-tab { background:var(--pg-surface-1); }
