@@ -1121,9 +1121,11 @@ async function renamePresetWithoutSwitching(oldName, newName) {
 }
 function showPresetRenameDialog(name) {
     showTextEditDialog('重命名预设', name, '输入新的预设名称', async newName => {
-        if (newName === name) return true;
+        const foldName = value => String(value).normalize('NFD')
+            .replace(/[\\u0300-\\u036f]/g, '').toLocaleLowerCase();
+        if (foldName(newName) === foldName(name)) return true;
         const duplicate = allNames().find(item =>
-            item !== name && item.toLocaleLowerCase() === newName.toLocaleLowerCase());
+            item !== name && foldName(item) === foldName(newName));
         if (duplicate) {
             notify('这个预设名称已经存在，请换一个名称', 'warning');
             return false;
@@ -1323,12 +1325,19 @@ function showHelp() {
     ]);
     addSection('3. 分类', [
         '支持自动识别同系列预设，也可手动创建分组、添加预设。一个预设可以同时属于多个分组。',
-        '对于名称相似但无法确定是否属于同一系列的预设，会列入「待确认合并」，可自行确认合并或排除。'
+        '对于名称相似但无法确定是否属于同一系列的预设，会列入「待确认合并」，可自行确认合并或排除。',
+        '分组标题右侧的铅笔只修改显示名称；自动分组仍使用原始匹配依据，手动分组保留原有成员。'
     ]);
-    addSection('4. 亮点', [
+    addSection('4. 编辑与命名', [
+        '分组标题右侧的铅笔用于修改分组显示名称。',
+        '预设条目右侧的铅笔用于重命名预设。重命名非当前预设时不会切换当前预设；重命名当前预设时保留正在使用的配置。',
+        '重命名会同步更新收藏、分组成员、排序和自动分组匹配锚点。'
+    ]);
+    addSection('5. 亮点', [
         ['安全切换：', '切换前自动检查当前预设是否存在未保存的修改，可选择保存后切换、不保存直接切换或取消操作。'],
         ['智能归类：', '自动识别相似预设系列，减少手动整理工作。'],
-        ['灵活分组：', '支持自定义分组，一个预设可同时归属于多个分组。']
+        ['灵活分组：', '支持自定义分组，一个预设可同时归属于多个分组。'],
+        ['原位编辑：', '修改名称不需要先切换到目标预设。']
     ]);
 
     dialog.append(body);
