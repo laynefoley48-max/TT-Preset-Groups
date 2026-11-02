@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.9
+ * 预设分组 / Preset Groups v0.2.10
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -744,7 +744,7 @@ function renderQuick() {
     const guide = text('span', '', 'pg-quick-guide');
     guide.append(
         text('span', '点击悬浮按钮进行分组'),
-        text('span', '悬浮按钮在扩展栏中打开')
+        text('span', '点击分组查看预设，点击预设可切换。')
     );
     copy.append(guide);
     const tail = text('span', '', 'pg-quick-tail');
@@ -1610,7 +1610,8 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.9')); win.append(foot);
+    const version = text('small', 'v0.2.10', 'pg-footer-version');
+    foot.append(label, version); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
 }
@@ -2047,7 +2048,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.9 已加载');
+    console.info('[预设分组] v0.2.10 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
