@@ -1,6 +1,6 @@
 # 预设分组（TauriTavern / SillyTavern）
 
-v0.2.2 交互、主题与分类识别优化版。仅管理 Chat Completion 预设。
+v0.2.3 交互、主题与分类识别优化版。仅管理 Chat Completion 预设。
 
 - 扩展设置沿用酒馆原生 `inline-drawer` 结构；内容仅提供「显示悬浮球」和「打开预设分组」。
 - 左下角扩展魔法棒菜单提供「预设分组」快捷入口。
