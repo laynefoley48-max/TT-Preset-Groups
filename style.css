@@ -587,3 +587,23 @@
   #pg-panel .pg-tabs { padding-bottom: 5px; }
   #pg-panel .pg-panel-footer { padding-top: 5px; padding-bottom: 5px; }
 }
+
+/* v0.2.10: Keep the version inline with the unsaved-change control. */
+#pg-panel .pg-panel-footer {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#pg-panel .pg-protect {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+#pg-panel .pg-panel-footer .pg-footer-version {
+  flex: 0 0 auto;
+  margin-left: auto;
+  white-space: nowrap;
+  text-align: right;
+}
