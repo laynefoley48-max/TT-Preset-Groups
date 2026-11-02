@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.1.0
+ * 预设分组 / Preset Groups v0.1.1
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -74,6 +74,7 @@ function canonical(value) {
 }
 const defaults = () => ({
     groups: [], // { id, name, type:'auto'|'manual', anchor }
+    groupOrder: [], // persisted drag order for both panel and quick grid
     memberships: {}, // preset name => group id array; manual choices persist
     favorites: [],
     manualOverrides: {}, // names explicitly modified by the user: never auto-reassign
@@ -135,7 +136,89 @@ function membersFor(name) {
 function matchesFilter(name) {
     return !ui.data.selectedGroups.length || membersFor(name).some(id => ui.data.selectedGroups.includes(id));
 }
-function sortGroups(list = ui.data.groups) { return [...list].sort((a, b) => collator.compare(a.name, b.name)); }
+function syncGroupOrder() {
+    const ids = new Set(ui.data.groups.map(g => g.id));
+    const old = Array.isArray(ui.data.groupOrder) ? ui.data.groupOrder : [];
+    const next = old.filter(id => ids.has(id));
+    const missing = ui.data.groups.filter(g => !next.includes(g.id))
+        .sort((a,b) => collator.compare(a.name, b.name));
+    next.push(...missing.map(g => g.id));
+    if (JSON.stringify(old) !== JSON.stringify(next)) {
+        ui.data.groupOrder = next;
+        save();
+    }
+    return next;
+}
+function sortGroups(list = ui.data.groups) {
+    const order = syncGroupOrder();
+    return [...list].sort((a,b) => order.indexOf(a.id) - order.indexOf(b.id));
+}
+function moveGroup(movingId, targetId, after) {
+    if (movingId === targetId) return;
+    const order = [...syncGroupOrder()];
+    if (!order.includes(movingId) || !order.includes(targetId)) return;
+    order.splice(order.indexOf(movingId), 1);
+    order.splice(order.indexOf(targetId) + (after ? 1 : 0), 0, movingId);
+    ui.data.groupOrder = order;
+    save(); refreshAll();
+}
+function makeDragHandle(group) {
+    const handle = htmlButton('⠿', () => {}, 'pg-drag-handle');
+    handle.title = '按住拖动，上下调整分组顺序（键盘方向键也可以）';
+    handle.setAttribute('aria-label', '调整「' + group.name + '」的顺序');
+    let dragging = false, pointer = null, source = null, destination = null, startX = 0, startY = 0;
+    const clear = () => document.querySelectorAll('#pg-panel .pg-dragging, #pg-panel .pg-drop-before, #pg-panel .pg-drop-after')
+        .forEach(el => el.classList.remove('pg-dragging','pg-drop-before','pg-drop-after'));
+    handle.addEventListener('pointerdown', e => {
+        if (e.button !== 0 || pointer !== null) return;
+        source = handle.closest('.pg-sortable-card');
+        if (!source) return;
+        pointer = e.pointerId;
+        dragging = false; destination = null; startX=e.clientX; startY=e.clientY;
+        try { handle.setPointerCapture(pointer); } catch {}
+        e.preventDefault(); e.stopPropagation();
+    });
+    handle.addEventListener('pointermove', e => {
+        if (pointer !== e.pointerId || !source) return;
+        if (!dragging && Math.hypot(e.clientX-startX,e.clientY-startY) < 7) return;
+        dragging = true; source.classList.add('pg-dragging');
+        document.querySelectorAll('#pg-panel .pg-drop-before, #pg-panel .pg-drop-after')
+            .forEach(el => el.classList.remove('pg-drop-before','pg-drop-after'));
+        const target = document.elementFromPoint(e.clientX,e.clientY)?.closest('.pg-sortable-card');
+        if (target && target !== source && target.dataset.groupId) {
+            const rect = target.getBoundingClientRect();
+            const after = e.clientY > rect.top + rect.height/2;
+            target.classList.add(after ? 'pg-drop-after' : 'pg-drop-before');
+            destination = { id:target.dataset.groupId, after };
+        } else destination = null;
+        const scroller = source.closest('.pg-content');
+        if (scroller) {
+            const rect = scroller.getBoundingClientRect();
+            if (e.clientY < rect.top+42) scroller.scrollTop -= 14;
+            if (e.clientY > rect.bottom-42) scroller.scrollTop += 14;
+        }
+        e.preventDefault();
+    });
+    function finish(cancel = false) {
+        if (pointer === null) return;
+        const to = destination;
+        pointer = null; source = null; destination = null;
+        const wasDragging = dragging; dragging = false;
+        clear();
+        if (!cancel && wasDragging && to) moveGroup(group.id,to.id,to.after);
+    }
+    handle.addEventListener('pointerup', e => { if (e.pointerId===pointer) { finish(); e.preventDefault(); } });
+    handle.addEventListener('pointercancel', () => finish(true));
+    handle.addEventListener('lostpointercapture', () => finish(true));
+    handle.addEventListener('keydown', e => {
+        if (!['ArrowUp','ArrowDown'].includes(e.key)) return;
+        const items=[...document.querySelectorAll('#pg-panel .pg-sortable-card')];
+        const pos=items.findIndex(it=>it.dataset.groupId===group.id);
+        const next=items[pos+(e.key==='ArrowUp'?-1:1)];
+        if (next) { e.preventDefault(); moveGroup(group.id,next.dataset.groupId,e.key==='ArrowDown'); }
+    });
+    return handle;
+}
 function makeId() { return `g_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`; }
 function addMembership(name, id, selected) {
     const members = new Set(membersFor(name));
@@ -308,24 +391,11 @@ function queueRefresh() {
     }, 150);
 }
 function renderProxy() {
-    if (!ui.native || !ui.proxy) return;
-    const active = ui.data.selectedGroups.length > 0;
-    ui.native.classList.toggle('pg-source-hidden', active);
-    ui.proxy.hidden = !active;
-    if (!active) return;
-    const options = originalOptions();
-    const visible = options.filter(o => matchesFilter(o.name) || o.value === ui.activeValue)
-        .sort((a, b) => collator.compare(a.name, b.name));
-    const focus = document.activeElement === ui.proxy;
-    ui.proxy.replaceChildren();
-    for (const opt of visible) {
-        const o = document.createElement('option');
-        o.value = opt.value;
-        o.textContent = opt.name + (!matchesFilter(opt.name) ? ' （当前使用·筛选外）' : '');
-        ui.proxy.append(o);
-    }
-    ui.proxy.value = ui.activeValue;
-    if (focus) ui.proxy.focus({ preventScroll: true });
+    // Compatibility: never hide, clone or rewrite #settings_preset_openai.
+    // Other extensions (e.g. preset editors/workshops) use its actual DOM and events.
+    if (ui.native) ui.native.classList.remove('pg-source-hidden');
+    const stale = $id('pg-filtered-preset-select');
+    if (stale) stale.remove();
 }
 function renderQuick() {
     if (!ui.quick) return;
@@ -354,6 +424,21 @@ function renderQuick() {
     }
     if (!groups.length) grid.append(text('p', '暂无分组，请在独立面板创建。', 'pg-muted'));
     ui.quick.append(grid);
+    if (ui.data.selectedGroups.length) {
+        const results = text('div', '', 'pg-filter-results');
+        const names = allNames().filter(matchesFilter).sort(collator.compare);
+        results.append(text('div', `筛选结果 · ${names.length} 个预设`, 'pg-filter-label'));
+        const list = text('div', '', 'pg-filter-list');
+        for (const name of names) {
+            const b = htmlButton(name === ui.activeName ? '✓ ' + name : name,
+                () => void switchTo(getValueByName(name)),
+                `pg-filter-preset${name === ui.activeName ? ' is-current' : ''}`);
+            b.title = name;
+            list.append(b);
+        }
+        if (!names.length) list.append(text('p', '这个组合暂无预设，请去独立面板添加。', 'pg-muted'));
+        results.append(list); ui.quick.append(results);
+    }
     const footer = text('div', '', 'pg-quick-footer');
     footer.append(text('small', '多选取并集 · 同一预设不重复'));
     footer.append(htmlButton('显示全部', () => {
@@ -365,30 +450,16 @@ function mountNative() {
     const select = getSelectElement();
     if (!(select instanceof HTMLSelectElement)) return false;
     if (ui.native === select && ui.quick?.isConnected) return true;
-    if (ui.native && ui.native !== select) ui.native.removeEventListener('change', onNativeChangeCapture, true);
-    ui.native = select; ui.pm = getManager();
-    ui.activeValue = String(select.value); ui.activeName = currentName();
-    if (ui.proxy) ui.proxy.remove();
+    ui.native = select;
+    ui.pm = getManager();
+    ui.activeValue = String(select.value);
+    ui.activeName = currentName();
+    renderProxy();
     if (ui.quick) ui.quick.remove();
-    ui.proxy = document.createElement('select');
-    ui.proxy.id = 'pg-filtered-preset-select';
-    ui.proxy.className = `${select.className || ''} pg-filtered-select`;
-    ui.proxy.setAttribute('aria-label', '按分组筛选的预设');
-    ui.proxy.hidden = true;
-    ui.proxy.addEventListener('change', async () => {
-        const target = ui.proxy.value;
-        ui.proxy.value = ui.activeValue;
-        await switchTo(target);
-    });
-    select.insertAdjacentElement('afterend', ui.proxy);
     ui.quick = text('div', '', 'pg-quick');
     ui.quick.id = 'pg-quick';
-    ui.proxy.insertAdjacentElement('afterend', ui.quick);
-    select.addEventListener('change', onNativeChangeCapture, true);
-    // Upstream uses jQuery synthetic change events for scripted switches.
-    if (window.jQuery) window.jQuery(select).off('change.presetGroups').on('change.presetGroups', () => {
-        setTimeout(() => { syncActive(); queueRefresh(); }, 0);
-    });
+    // Only add a sibling panel; never override the native select or its change event.
+    select.insertAdjacentElement('afterend', ui.quick);
     refreshAll();
     return true;
 }
@@ -466,19 +537,93 @@ function makePresetRow(name, compact = false) {
 }
 function groupCard(group, list, headingRight = '') {
     const section = text('section', '', 'pg-series-card');
+    const sortable = ui.data.groups.some(g => g.id === group.id);
+    if (sortable) { section.classList.add('pg-sortable-card'); section.dataset.groupId = group.id; }
     const collapsed = ui.data.collapsed[group.id] !== false;
+    const top = text('div', '', 'pg-series-top');
+    if (sortable) top.append(makeDragHandle(group));
     const head = htmlButton('', () => {
         ui.data.collapsed[group.id] = !collapsed; save(); renderPanel();
     }, 'pg-series-heading');
     head.append(text('span', `${collapsed ? '▸' : '▾'} ${group.name}`));
     head.append(text('span', headingRight || `${list.length} 项`, 'pg-count'));
-    section.append(head);
+    top.append(head); section.append(top);
     if (!collapsed) {
         const body = text('div', '', 'pg-series-body');
         for (const name of list) body.append(makePresetRow(name));
+        if (!list.length) body.append(text('p', '这个分组还没有预设。可以点「选择预设」添加。', 'pg-empty'));
         section.append(body);
     }
     return section;
+}
+function renameGroup(group) {
+    const newName = window.prompt('修改分组名称', group.name);
+    if (newName === null) return;
+    const cleaned = newName.trim();
+    if (!cleaned || ui.data.groups.some(g=>g.id!==group.id && g.name===cleaned))
+        return notify('名称不能为空或与现有分组重复', 'warning');
+    group.name=cleaned; save(); refreshAll();
+}
+function deleteGroup(group) {
+    if (!window.confirm(`只删除分组「${group.name}」？其中的预设不会被删除。`)) return;
+    ui.data.groups = ui.data.groups.filter(x=>x.id!==group.id);
+    ui.data.groupOrder = ui.data.groupOrder.filter(id=>id!==group.id);
+    ui.data.selectedGroups = ui.data.selectedGroups.filter(id=>id!==group.id);
+    for (const [name,members] of Object.entries(ui.data.memberships)) {
+        if (members.includes(group.id)) ui.data.manualOverrides[name] = true;
+        ui.data.memberships[name] = members.filter(id=>id!==group.id);
+    }
+    save(); refreshAll();
+}
+function showGroupMemberPicker(group) {
+    const scrim = text('div', '', 'pg-confirm-backdrop');
+    const dialog = text('section', '', 'pg-editor-dialog pg-member-picker');
+    dialog.setAttribute('role','dialog'); dialog.setAttribute('aria-modal','true');
+    const header = text('div', '', 'pg-picker-head');
+    const labels = text('div', '', 'pg-picker-title');
+    labels.append(text('h3', `选择预设 · ${group.name}`),
+        text('p', '勾选即加入，取消勾选即移出。可以一次添加多个预设。'));
+    header.append(labels, htmlButton('×', () => scrim.remove(), 'pg-picker-x'));
+    dialog.append(header);
+    const all = allNames().sort(collator.compare);
+    const chosen = new Set(all.filter(n => membersFor(n).includes(group.id)));
+    const search = document.createElement('input');
+    search.type='search'; search.placeholder='搜索要添加的预设…'; search.className='pg-picker-search';
+    dialog.append(search);
+    const info = text('p', '', 'pg-picker-count'); dialog.append(info);
+    const list = text('div', '', 'pg-picker-list'); dialog.append(list);
+    function draw() {
+        list.replaceChildren();
+        const names=all.filter(n => normalized(n).includes(normalized(search.value)));
+        info.textContent = `已选 ${chosen.size} / 共 ${all.length} 个预设`;
+        for (const name of names) {
+            const line = text('label', '', 'pg-checkline');
+            const check = document.createElement('input'); check.type='checkbox';
+            check.checked=chosen.has(name);
+            check.addEventListener('change', () => {
+                check.checked ? chosen.add(name) : chosen.delete(name);
+                info.textContent = `已选 ${chosen.size} / 共 ${all.length} 个预设`;
+            });
+            line.append(check, text('span',name)); list.append(line);
+        }
+        if (!names.length) list.append(text('p','没有匹配的预设。','pg-muted'));
+    }
+    search.addEventListener('input', draw); draw();
+    const actions=text('div','','pg-picker-actions');
+    actions.append(htmlButton('取消', () => scrim.remove(), 'pg-secondary'));
+    actions.append(htmlButton('保存分组', () => {
+        for (const name of all) {
+            const before=membersFor(name).includes(group.id), after=chosen.has(name);
+            if (before===after) continue;
+            const ids=new Set(membersFor(name));
+            after ? ids.add(group.id) : ids.delete(group.id);
+            ui.data.memberships[name]=[...ids];
+            ui.data.manualOverrides[name]=true;
+        }
+        save(); scrim.remove(); refreshAll();
+    }, 'pg-primary'));
+    dialog.append(actions); scrim.append(dialog); document.body.append(scrim);
+    scrim.addEventListener('click',e=>{ if(e.target===scrim) scrim.remove(); });
 }
 function renderPanel() {
     if (!ui.panel || !ui.panelOpen) return;
@@ -515,7 +660,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.1.0'));
+    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.1.1'));
     win.append(foot);
     renderPanelContent();
 }
@@ -538,44 +683,45 @@ function renderPanelContent() {
         if (!favorites.length) content.append(text('p', '没有符合条件的收藏预设。', 'pg-empty'));
         for (const name of favorites) content.append(makePresetRow(name));
     } else if (ui.tab === 'groups') {
-        const controls = text('div', '', 'pg-inline');
-        const input = document.createElement('input'); input.placeholder = '新分组名称'; input.maxLength = 60;
-        controls.append(input, htmlButton('新建', () => {
-            const name = input.value.trim();
-            if (!name) return;
-            if (ui.data.groups.some(g => g.name === name)) return notify('分组名称已经存在', 'warning');
-            ui.data.groups.push({ id: makeId(), name, type: 'manual', anchor: '' });
-            save(); renderQuick(); renderPanel();
-        }, 'pg-primary'));
+        const help = text('p','这里管理分组。点击「选择预设」即可批量勾选添加；左侧 ⠿ 按住可拖动排序。','pg-category-help');
+        content.append(help);
+        const controls = text('div','','pg-inline');
+        const input=document.createElement('input'); input.placeholder='输入分组名称'; input.maxLength=60;
+        const create=() => {
+            const label=input.value.trim();
+            if (!label) return;
+            if (ui.data.groups.some(g=>g.name===label)) return notify('分组名称已经存在','warning');
+            const group={id:makeId(),name:label,type:'manual',anchor:''};
+            ui.data.groups.push(group);
+            ui.data.groupOrder=syncGroupOrder();
+            save(); refreshAll();
+            showGroupMemberPicker(group);
+        };
+        input.addEventListener('keydown',e=>{if(e.key==='Enter') create();});
+        controls.append(input,htmlButton('＋ 新建分组',create,'pg-primary'));
         content.append(controls);
-        for (const g of sortGroups()) {
-            const groupMembers = names.filter(n => membersFor(n).includes(g.id)).sort(versionCompare);
-            if (ui.query && !groupMembers.length && !normalized(g.name).includes(normalized(ui.query))) continue;
-            const card = groupCard(g, groupMembers, `${groupMembers.length} 项`);
-            const actions = text('div', '', 'pg-group-actions');
-            actions.append(text('small', g.type === 'auto' ? '自动识别' : '自定义'));
-            actions.append(htmlButton('改名', () => {
-                const result = window.prompt('新分组名称', g.name);
-                if (result === null) return;
-                const label = result.trim();
-                if (!label || ui.data.groups.some(x => x.id !== g.id && x.name === label)) return notify('名称不能为空或重复', 'warning');
-                g.name = label; save(); refreshAll();
-            }, 'pg-text-btn'));
-            actions.append(htmlButton('删除分组', () => {
-                if (!window.confirm(`只删除分组「${g.name}」？预设本身不会被删除。`)) return;
-                ui.data.groups = ui.data.groups.filter(x => x.id !== g.id);
-                ui.data.selectedGroups = ui.data.selectedGroups.filter(id => id !== g.id);
-                for (const [preset, list] of Object.entries(ui.data.memberships)) {
-                    if (list.includes(g.id)) ui.data.manualOverrides[preset] = true;
-                    ui.data.memberships[preset] = list.filter(id => id !== g.id);
-                }
-                save(); refreshAll();
-            }, 'pg-text-btn pg-danger'));
-            card.append(actions); content.append(card);
+        for (const [type,title,description] of [
+            ['manual','我的分组','自己创建，可添加任意预设'],
+            ['auto','自动识别的系列','按名称相似度整理，也可以手动纠错']
+        ]) {
+            const groups=sortGroups().filter(g=>g.type===type);
+            content.append(text('div',`${title} · ${groups.length}`,'pg-category-section'));
+            content.append(text('p',description,'pg-category-note'));
+            if (!groups.length) { content.append(text('p',type==='manual'?'还没有自建分组。':'暂无自动识别系列。','pg-muted')); continue; }
+            for (const group of groups) {
+                const groupMembers=names.filter(n=>membersFor(n).includes(group.id)).sort(versionCompare);
+                if (ui.query && !groupMembers.length && !normalized(group.name).includes(normalized(ui.query))) continue;
+                const card=groupCard(group,groupMembers,`${groupMembers.length} 项`);
+                const actions=text('div','','pg-group-actions');
+                actions.append(htmlButton('＋ 选择预设',()=>showGroupMemberPicker(group),'pg-primary pg-add-members'));
+                actions.append(htmlButton('改名',()=>renameGroup(group),'pg-text-btn'));
+                actions.append(htmlButton('删除',()=>deleteGroup(group),'pg-text-btn pg-danger'));
+                card.append(actions); content.append(card);
+            }
         }
-        const uncategorized = names.filter(n => membersFor(n).length === 0).sort(collator.compare);
-        const orphanGroup = { id: 'no-group', name: '未分类' };
-        content.append(groupCard(orphanGroup, uncategorized, `${uncategorized.length} 项`));
+        const uncategorized=names.filter(n=>membersFor(n).length===0).sort(collator.compare);
+        content.append(text('div','未分类预设','pg-category-section'));
+        content.append(groupCard({id:'no-group',name:'未分类'},uncategorized,`${uncategorized.length} 项`));
     } else {
         const grouped = new Set();
         for (const g of sortGroups()) {
@@ -647,7 +793,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.1.0 已加载');
+    console.info('[预设分组] v0.1.1 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
