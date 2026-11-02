@@ -607,3 +607,22 @@
   white-space: nowrap;
   text-align: right;
 }
+
+/* v0.2.12: Compact launcher placement selector in native extension settings. */
+#pg-extensions-entry .pg-entry-mode-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0 10px;
+  font-size: 13px;
+}
+#pg-extensions-entry .pg-entry-mode-row > span { flex: 0 0 auto; }
+#pg-extensions-entry .pg-entry-mode-select {
+  flex: 1 1 130px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+}
