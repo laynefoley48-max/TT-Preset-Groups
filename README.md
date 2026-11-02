@@ -1,6 +1,6 @@
 # 预设分组（TauriTavern / SillyTavern）
 
-v0.2.4 交互与界面收尾版。仅管理 Chat Completion 预设。
+v0.2.5 交互与界面收尾版。仅管理 Chat Completion 预设。
 
 ## 入口与切换
 
