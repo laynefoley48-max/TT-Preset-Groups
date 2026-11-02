@@ -173,7 +173,9 @@ function save() {
 function applyTheme() {
     const theme = ['follow','light','dark'].includes(ui.data?.theme) ? ui.data.theme : 'follow';
     for (const root of [ui.quick, ui.panel, ui.floating, ...document.querySelectorAll('.pg-confirm-backdrop')]) {
-        if (root) root.dataset.pgTheme = theme;
+        if (!root) continue;
+        root.dataset.pgTheme = theme;
+        if (root === ui.panel || root.classList.contains('pg-confirm-backdrop')) syncOverlayAppearance(root);
     }
 }
 function setTheme(theme) {
@@ -848,7 +850,22 @@ function mountNative() {
  * Put free-floating dialogs outside body so custom ST themes that transform,
  * filter or scale body cannot change the containing block of fixed overlays.
  */
+function syncOverlayAppearance(node) {
+    if (!node || !document.body || !window.getComputedStyle) return;
+    const bodyStyle = window.getComputedStyle(document.body);
+    // Portaling outside body must not discard the active ST/TT font and theme.
+    node.style.fontFamily = bodyStyle.fontFamily;
+    for (const key of [
+        '--SmartThemeBodyColor', '--SmartThemeBlurTintColor',
+        '--SmartThemeBorderColor', '--SmartThemeQuoteColor', '--SmartThemeEmColor',
+    ]) {
+        const value = bodyStyle.getPropertyValue(key).trim();
+        if (value) node.style.setProperty(key, value);
+        else node.style.removeProperty(key);
+    }
+}
 function appendOverlay(node) {
+    syncOverlayAppearance(node);
     document.documentElement.append(node);
     syncViewportOverlays();
 }
