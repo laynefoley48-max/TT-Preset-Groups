@@ -1,12 +1,12 @@
 /**
- * 预设分组 / Preset Groups v0.2.3
+ * 预设分组 / Preset Groups v0.2.4
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
 const SLUG = 'tt_preset_groups_v1';
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 const CLASSIFICATION_ALGORITHM_VERSION = 2;
-const COLLAPSE_DEFAULTS_VERSION = 3;
+const COLLAPSE_DEFAULTS_VERSION = 4;
 const $id = (id) => document.getElementById(id);
 const text = (tag, content, cls = '') => {
     const n = document.createElement(tag);
@@ -158,6 +158,8 @@ const ui = {
     floatingResizeHandler: null,
     needsCollapseReset: false,
     needsClassificationRebuild: false,
+    helpOpen: false,
+    helpScrim: null,
 };
 function notify(message, level = 'info') {
     if (window.toastr?.[level]) window.toastr[level](message);
@@ -275,14 +277,15 @@ function movePreset(groupId, movingName, targetName, after) {
 }
 function makeDragHandle(kind, itemId, groupId = '') {
     const handle = htmlButton('⠿', () => {}, 'pg-drag-handle');
-    handle.title = '按住拖动，上下调整顺序（方向键也可以）';
+    handle.title = '拖动调整顺序（方向键也可以）';
     handle.setAttribute('aria-label', kind === 'group' ? '调整分组顺序' : '调整预设顺序');
     const itemSelector = kind === 'group' ? '.pg-sortable-card' : '.pg-sortable-preset';
     let dragging = false, pointer = null, source = null, destination = null;
     let startX = 0, startY = 0;
 
-    const clear = () => document.querySelectorAll('#pg-panel .pg-dragging')
-        .forEach(el => el.classList.remove('pg-dragging'));
+    const clear = () => document.querySelectorAll(
+        '#pg-panel .pg-dragging, #pg-panel .pg-drop-before, #pg-panel .pg-drop-after'
+    ).forEach(el => el.classList.remove('pg-dragging', 'pg-drop-before', 'pg-drop-after'));
 
     handle.addEventListener('pointerdown', event => {
         if (event.button !== 0 || pointer !== null || !ui.sortMode) return;
@@ -300,22 +303,23 @@ function makeDragHandle(kind, itemId, groupId = '') {
 
     handle.addEventListener('pointermove', event => {
         if (pointer !== event.pointerId || !source) return;
-        const distance = Math.hypot(event.clientX - startX, event.clientY - startY);
-        if (!dragging && distance < 7) return;
+        if (!dragging && Math.hypot(event.clientX - startX, event.clientY - startY) < 7) return;
 
         dragging = true;
         source.classList.add('pg-dragging');
+        document.querySelectorAll('#pg-panel .pg-drop-before, #pg-panel .pg-drop-after')
+            .forEach(el => el.classList.remove('pg-drop-before', 'pg-drop-after'));
 
-        // Resolve the insertion target from the pointer's actual position.
-        // No long-press gate and no overlay line that can be hidden by a finger.
         const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(itemSelector);
         const sameList = kind === 'group'
-            ? !!target?.dataset.groupId
+            ? !!target?.dataset.groupId &&
+                (ui.tab !== 'groups' || target.dataset.groupType === source.dataset.groupType)
             : target?.dataset.groupId === groupId;
 
         if (target && target !== source && sameList) {
             const rect = target.getBoundingClientRect();
             const after = event.clientY > rect.top + rect.height / 2;
+            target.classList.add(after ? 'pg-drop-after' : 'pg-drop-before');
             destination = kind === 'group'
                 ? { id: target.dataset.groupId, after }
                 : { name: target.dataset.presetName, after };
@@ -720,11 +724,15 @@ function renderQuick() {
     if (!ui.quick) return;
     ui.quick.replaceChildren();
     ui.quick.dataset.pgTheme = ui.data.theme || 'follow';
-    const header = htmlButton('预设分组', () => {
+    const header = htmlButton('', () => {
         ui.data.gridOpen = !ui.data.gridOpen; save(); renderQuick();
     }, 'pg-quick-header');
+    header.setAttribute('aria-expanded', String(!!ui.data.gridOpen));
+    header.title = ui.data.gridOpen ? '收起分组筛选' : '展开分组筛选';
     const count = ui.data.selectedGroups.length;
-    header.append(text('span', `${count ? `${count} 已选` : '未筛选'} · ${ui.data.gridOpen ? '⌃' : '⌄'}`, 'pg-quick-meta'));
+    header.append(text('span', '预设分组', 'pg-quick-title'));
+    header.append(text('small', '点击悬浮按钮进行分组，悬浮按钮在扩展栏中打开。', 'pg-quick-guide'));
+    header.append(text('span', count ? `${count} 已选` : '未筛选', 'pg-quick-meta'));
     ui.quick.append(header);
     if (!ui.data.gridOpen) return;
 
@@ -755,7 +763,6 @@ function renderQuick() {
     if (!groups.length) grid.append(text('p', '暂无分组，请在独立面板创建。', 'pg-muted'));
     ui.quick.append(grid);
 
-    // Pagination belongs to the group grid, not to the filtered preset results.
     if (pageCount > 1) {
         const row = text('div', '', 'pg-quick-pagination-row');
         row.append(text('small', '分组', 'pg-pagination-label'));
@@ -843,6 +850,7 @@ function createPanel() {
     windowBox.setAttribute('role', 'dialog'); windowBox.setAttribute('aria-label', '预设分组管理');
     scrim.append(windowBox); document.body.append(scrim); ui.panel = scrim;
     document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && ui.helpOpen) { closeHelp(); return; }
         if (e.key === 'Escape' && ui.panelOpen && !ui.confirmOpen) closePanel();
     });
 }
@@ -907,6 +915,7 @@ function makePresetRow(name, compact = false, groupId = null) {
 function groupCard(group, list, headingRight = '') {
     const section = text('section', '', 'pg-series-card');
     const realGroup = ui.data.groups.some(item => item.id === group.id);
+    if (realGroup) section.dataset.groupType = group.type || '';
     if (realGroup && ui.sortMode) { section.classList.add('pg-sortable-card'); section.dataset.groupId = group.id; }
     let collapsed = ui.data.collapsed[group.id] !== false;
     const top = text('div', '', 'pg-series-top');
@@ -1007,6 +1016,66 @@ function showGroupMemberPicker(group) {
     dialog.append(actions); scrim.append(dialog); document.body.append(scrim);
     scrim.addEventListener('click',e=>{ if(e.target===scrim) scrim.remove(); });
 }
+function closeHelp() {
+    if (ui.helpScrim) ui.helpScrim.remove();
+    ui.helpScrim = null;
+    ui.helpOpen = false;
+}
+function showHelp() {
+    if (ui.helpOpen || ui.confirmOpen) return;
+    const scrim = text('div', '', 'pg-confirm-backdrop');
+    scrim.dataset.pgTheme = ui.data.theme || 'follow';
+    const dialog = text('section', '', 'pg-editor-dialog pg-help-dialog');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-label', '预设分组使用说明');
+
+    const head = text('div', '', 'pg-help-head');
+    head.append(text('h3', '预设分组 · 使用说明', 'pg-help-title'));
+    head.append(htmlButton('×', closeHelp, 'pg-help-close'));
+    dialog.append(head);
+
+    const body = text('div', '', 'pg-help-body');
+    const addSection = (title, paragraphs) => {
+        const section = text('section', '', 'pg-help-section');
+        section.append(text('h4', title, 'pg-help-section-title'));
+        for (const paragraph of paragraphs) {
+            const p = text('p', '', 'pg-help-text');
+            if (Array.isArray(paragraph)) {
+                p.append(text('strong', paragraph[0]), text('span', paragraph[1]));
+            } else {
+                p.textContent = paragraph;
+            }
+            section.append(p);
+        }
+        body.append(section);
+    };
+
+    addSection('1. 全部', [
+        '展示所有预设，按分组归类。支持搜索、展开与收起、调整排序，点击预设名称即可切换。'
+    ]);
+    addSection('2. 收藏', [
+        '集中显示已收藏的预设。'
+    ]);
+    addSection('3. 分类', [
+        '支持自动识别同系列预设，也可手动创建分组、添加预设。一个预设可以同时属于多个分组。',
+        '对于名称相似但无法确定是否属于同一系列的预设，会列入「待确认合并」，可自行确认合并或排除。'
+    ]);
+    addSection('4. 亮点', [
+        ['安全切换：', '切换前自动检查当前预设是否存在未保存的修改，可选择保存后切换、不保存直接切换或取消操作。'],
+        ['智能归类：', '自动识别相似预设系列，减少手动整理工作。'],
+        ['灵活分组：', '支持自定义分组，一个预设可同时归属于多个分组。']
+    ]);
+
+    dialog.append(body);
+    scrim.append(dialog);
+    document.body.append(scrim);
+    ui.helpScrim = scrim;
+    ui.helpOpen = true;
+    scrim.addEventListener('click', event => {
+        if (event.target === scrim) closeHelp();
+    });
+}
 function renderPanel() {
     if (!ui.panel || !ui.panelOpen) return;
     const previousTop = $id('pg-panel-content')?.scrollTop ?? 0;
@@ -1014,7 +1083,7 @@ function renderPanel() {
     ui.panel.dataset.pgTheme = ui.data.theme || 'follow';
     const head = text('header', '', 'pg-head');
     const title = text('div', '', 'pg-title');
-    title.append(text('strong', '预设分组'), text('small', '点击预设即可切换'));
+    title.append(text('strong', '预设分组'), text('small', '点击预设即可安全切换'));
     const actions = text('div', '', 'pg-head-actions');
     const themeWrap = text('div', '', 'pg-theme-wrap');
     const themeButton = htmlButton('', () => {
@@ -1032,7 +1101,10 @@ function renderPanel() {
         option.dataset.theme = value; themeMenu.append(option);
     }
     themeWrap.append(themeButton, themeMenu);
-    actions.append(themeWrap, htmlButton('×', closePanel, 'pg-close'));
+    const helpButton = htmlButton('说明', showHelp, 'pg-help-button');
+    helpButton.title = '查看使用说明';
+    helpButton.setAttribute('aria-label', '查看使用说明');
+    actions.append(helpButton, themeWrap, htmlButton('×', closePanel, 'pg-close'));
     head.append(title, actions); win.append(head);
     const search = document.createElement('input');
     search.type = 'search'; search.placeholder = '搜索预设名称或版本…';
@@ -1055,7 +1127,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.3')); win.append(foot);
+    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.4')); win.append(foot);
     renderPanelContent();
     const rebuilt = $id('pg-panel-content'); if (rebuilt) rebuilt.scrollTop = previousTop;
     applyTheme();
@@ -1093,7 +1165,6 @@ function setAllGroupsExpanded(expanded) {
     for (const id of currentAllGroupIds()) ui.data.collapsed[id] = !expanded;
     save();
     renderPanelContent();
-    resetAutoCollapseTimer();
 }
 function applyCollapsedDefaults() {
     for (const group of ui.data.groups) ui.data.collapsed[group.id] = true;
@@ -1116,7 +1187,7 @@ function renderPanelContent() {
     const all = allNames();
     content.append(text('p', `共 ${all.length} 个预设 · ${ui.data.groups.length} 个分组 · 当前：${ui.activeName || '无'}`, 'pg-summary'));
 
-    if (ui.tab === 'all') {
+    if (['all', 'groups'].includes(ui.tab)) {
         const toolbar = text('div', '', 'pg-content-toolbar');
         const actions = text('div', '', 'pg-toolbar-actions');
         actions.append(htmlButton(ui.sortMode ? '完成' : '排序', () => {
@@ -1481,7 +1552,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.3 已加载');
+    console.info('[预设分组] v0.2.4 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
