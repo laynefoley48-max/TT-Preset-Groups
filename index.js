@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.0
+ * 预设分组 / Preset Groups v0.2.1
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -101,6 +101,7 @@ const ui = {
     floating: null,
     drawerCheckbox: null,
     sortMode: false,
+    quickPage: 0,
 };
 function notify(message, level = 'info') {
     if (window.toastr?.[level]) window.toastr[level](message);
@@ -548,10 +549,19 @@ function renderQuick() {
     header.append(text('span', `${count ? `${count} 已选` : '未筛选'} · ${ui.data.gridOpen ? '⌃' : '⌄'}`, 'pg-quick-meta'));
     ui.quick.append(header);
     if (!ui.data.gridOpen) return;
-    const grid = text('div', '', 'pg-quick-grid');
+
     const groups = [...sortGroups()];
-    if (allNames().some(name => membersFor(name).length === 0)) groups.push({ id: '__uncategorized__', name: '未分类', type: 'special' });
-    for (const group of groups) {
+    if (allNames().some(name => membersFor(name).length === 0)) {
+        groups.push({ id: '__uncategorized__', name: '未分类', type: 'special' });
+    }
+    const pageSize = 9;
+    const pageCount = Math.max(1, Math.ceil(groups.length / pageSize));
+    ui.quickPage = Math.max(0, Math.min(Number.isInteger(ui.quickPage) ? ui.quickPage : 0, pageCount - 1));
+    const pageStart = ui.quickPage * pageSize;
+    const pageGroups = groups.slice(pageStart, pageStart + pageSize);
+
+    const grid = text('div', '', 'pg-quick-grid');
+    for (const group of pageGroups) {
         const selected = ui.data.selectedGroups.includes(group.id);
         const button = htmlButton(group.name, () => {
             const selectedIds = new Set(ui.data.selectedGroups);
@@ -566,6 +576,7 @@ function renderQuick() {
     }
     if (!groups.length) grid.append(text('p', '暂无分组，请在独立面板创建。', 'pg-muted'));
     ui.quick.append(grid);
+
     if (ui.data.selectedGroups.length) {
         const results = text('div', '', 'pg-filter-results');
         const names = allNames().filter(matchesFilter).sort(versionCompare);
@@ -582,8 +593,26 @@ function renderQuick() {
         if (!names.length) list.append(text('p', '这个组合暂无预设，请去独立面板添加。', 'pg-muted'));
         results.append(list); ui.quick.append(results);
     }
+
     const footer = text('div', '', 'pg-quick-footer');
     footer.append(text('small', '多选取并集 · 同一预设不重复'));
+    if (pageCount > 1) {
+        const pagination = text('div', '', 'pg-quick-pagination');
+        const previous = htmlButton('‹', () => {
+            ui.quickPage = Math.max(0, ui.quickPage - 1); renderQuick();
+        }, 'pg-page-button');
+        previous.disabled = ui.quickPage === 0;
+        previous.title = '上一页'; previous.setAttribute('aria-label', '上一页');
+        const indicator = text('span', `${ui.quickPage + 1} / ${pageCount}`, 'pg-page-indicator');
+        indicator.setAttribute('aria-live', 'polite');
+        const next = htmlButton('›', () => {
+            ui.quickPage = Math.min(pageCount - 1, ui.quickPage + 1); renderQuick();
+        }, 'pg-page-button');
+        next.disabled = ui.quickPage >= pageCount - 1;
+        next.title = '下一页'; next.setAttribute('aria-label', '下一页');
+        pagination.append(previous, indicator, next);
+        footer.append(pagination);
+    }
     if (ui.data.selectedGroups.length) footer.append(htmlButton('清除筛选', () => {
         ui.data.selectedGroups = []; save(); refreshAll();
     }, 'pg-text-btn'));
@@ -835,7 +864,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.0')); win.append(foot);
+    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.1')); win.append(foot);
     renderPanelContent();
     const rebuilt = $id('pg-panel-content'); if (rebuilt) rebuilt.scrollTop = previousTop;
     applyTheme();
@@ -1057,7 +1086,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.0 已加载');
+    console.info('[预设分组] v0.2.1 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
