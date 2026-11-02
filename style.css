@@ -146,6 +146,7 @@
 #pg-quick .pg-group-tile.is-active { background:var(--pg-surface-3); }
 #pg-quick .pg-filter-preset { background:var(--pg-surface-2); }
 #pg-quick .pg-group-tile small,
+#pg-quick .pg-quick-meta,
 #pg-quick .pg-quick-footer small,
 #pg-quick .pg-pagination-label,
 #pg-quick .pg-page-indicator,
@@ -214,6 +215,7 @@
 
 /* Follow mode uses a solid neutral button base; theme accent remains on its border. */
 #pg-floating {
+  --pg-accent:var(--SmartThemeQuoteColor, #8A8A8A);
   position:fixed; z-index:99998; right:16px; bottom:108px;
   width:42px; height:42px; border:1px solid var(--SmartThemeQuoteColor, #8A8A8A);
   border-radius:50%; display:flex; align-items:center; justify-content:center;
