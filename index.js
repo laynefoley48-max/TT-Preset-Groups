@@ -384,12 +384,13 @@ function inferGroups() {
     if (!names.length) return;
     let changed = false;
     const known = new Set(Object.keys(ui.data.memberships));
-    const autoGroups = ui.data.groups.filter(item => item.type === 'auto');
 
     for (const name of names) {
         if (known.has(name) || ui.data.manualOverrides[name]) continue;
 
-        const groupCandidates = autoGroups.map(group => ({
+        // Re-read the live group list on every pass so a newly created series
+        // can also collect later matching presets in the same scan.
+        const groupCandidates = ui.data.groups.filter(item => item.type === 'auto').map(group => ({
             group,
             ...comparePresetNames(name, group.anchor || group.name),
             otherName: group.anchor || group.name,
