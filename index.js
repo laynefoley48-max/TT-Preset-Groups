@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.10
+ * 预设分组 / Preset Groups v0.2.11
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -831,7 +831,14 @@ function renderQuick() {
 function mountNative() {
     const select = getSelectElement();
     if (!(select instanceof HTMLSelectElement)) return false;
-    if (ui.native === select && ui.quick?.isConnected) return true;
+    // Keep the native preset selector and its save/rename/new buttons together.
+    // Repair an older inline placement if the host did not rebuild the selector.
+    const row = select.closest('.flex-container.flexNoGap')
+        || select.parentElement;
+    if (ui.native === select && ui.quick?.isConnected) {
+        if (row?.contains(ui.quick)) row.insertAdjacentElement('afterend', ui.quick);
+        return true;
+    }
     ui.native = select;
     ui.pm = getManager();
     ui.activeValue = String(select.value);
@@ -840,8 +847,10 @@ function mountNative() {
     if (ui.quick) ui.quick.remove();
     ui.quick = text('div', '', 'pg-quick');
     ui.quick.id = 'pg-quick'; ui.quick.dataset.pgTheme = ui.data.theme || 'follow';
-    // Only add a sibling panel; never override the native select or its change event.
-    select.insertAdjacentElement('afterend', ui.quick);
+    // Insert BELOW the complete native selector+buttons row, never between
+    // the selector and its save/edit/new buttons. The host owns that row.
+    if (row?.parentElement) row.insertAdjacentElement('afterend', ui.quick);
+    else select.insertAdjacentElement('afterend', ui.quick);
     refreshAll();
     return true;
 }
@@ -1610,7 +1619,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    const version = text('small', 'v0.2.10', 'pg-footer-version');
+    const version = text('small', 'v0.2.11', 'pg-footer-version');
     foot.append(label, version); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
@@ -2048,7 +2057,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.10 已加载');
+    console.info('[预设分组] v0.2.11 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
