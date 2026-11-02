@@ -524,7 +524,7 @@ function reclassifyAutomaticGroups(silent = false) {
     syncGroupOrder();
     save();
     if (!silent) notify('已重新识别自动分类；手动分组、手动归属、收藏和排序已保留。', 'success');
-    if (ui.panelOpen) renderPanelContent();
+    refreshAll();
 }
 function syncImportedPresets(initial = false) {
     const names = allNames();
@@ -1130,7 +1130,7 @@ function renderPanelContent() {
                 card.append(text('div', `${match.name}  ↔  ${other}`, 'pg-pending-title'));
                 const evidence = match.common ? `连续相同「${match.common}」 · ` : '';
                 const suffixNote = match.usedAmbiguousSuffix ? ' · 比较时尝试忽略末尾数字' : '';
-                card.append(text('small', `${evidence}名称相似度 ${Math.round(match.score * 100)}%${suffixNote}`, 'pg-pending-score'));
+                card.append(text('small', `${evidence}名称相似度 ${(match.score * 100).toFixed(1).replace(/\\.0$/, '')}%${suffixNote}`, 'pg-pending-score'));
                 const actions = text('div', '', 'pg-pending-actions');
                 actions.append(htmlButton('合并为同系列', () => acceptPendingMatch(match.id), 'pg-primary'));
                 actions.append(htmlButton('不是同系列', () => ignorePendingMatch(match.id), 'pg-text-btn'));
