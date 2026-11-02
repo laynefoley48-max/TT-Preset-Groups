@@ -1,12 +1,12 @@
 /**
- * 预设分组 / Preset Groups v0.2.2
+ * 预设分组 / Preset Groups v0.2.3
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
 const SLUG = 'tt_preset_groups_v1';
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 const CLASSIFICATION_ALGORITHM_VERSION = 2;
-const COLLAPSE_DEFAULTS_VERSION = 2;
+const COLLAPSE_DEFAULTS_VERSION = 3;
 const $id = (id) => document.getElementById(id);
 const text = (tag, content, cls = '') => {
     const n = document.createElement(tag);
@@ -274,43 +274,54 @@ function movePreset(groupId, movingName, targetName, after) {
 }
 function makeDragHandle(kind, itemId, groupId = '') {
     const handle = htmlButton('⠿', () => {}, 'pg-drag-handle');
-    handle.title = '长按约 2 秒进入排序，再拖动调整位置';
+    handle.title = '按住拖动，上下调整顺序（方向键也可以）';
     handle.setAttribute('aria-label', kind === 'group' ? '调整分组顺序' : '调整预设顺序');
     const itemSelector = kind === 'group' ? '.pg-sortable-card' : '.pg-sortable-preset';
-    let pointer = null, source = null, destination = null, armed = false, dragging = false;
-    let startX = 0, startY = 0, armTimer = null;
-    const clearMarks = () => document.querySelectorAll('#pg-panel .pg-dragging, #pg-panel .pg-drop-before, #pg-panel .pg-drop-after, #pg-panel .pg-drag-armed')
-        .forEach(el => el.classList.remove('pg-dragging','pg-drop-before','pg-drop-after','pg-drag-armed'));
-    const cancelPending = () => { if (armTimer) clearTimeout(armTimer); armTimer = null; };
+    let dragging = false, pointer = null, source = null, destination = null;
+    let startX = 0, startY = 0;
+
+    const clear = () => document.querySelectorAll('#pg-panel .pg-dragging')
+        .forEach(el => el.classList.remove('pg-dragging'));
+
     handle.addEventListener('pointerdown', event => {
         if (event.button !== 0 || pointer !== null || !ui.sortMode) return;
         source = handle.closest(itemSelector);
         if (!source) return;
-        pointer = event.pointerId; destination = null; armed = false; dragging = false;
-        startX = event.clientX; startY = event.clientY;
+        pointer = event.pointerId;
+        dragging = false;
+        destination = null;
+        startX = event.clientX;
+        startY = event.clientY;
         try { handle.setPointerCapture(pointer); } catch {}
-        armTimer = setTimeout(() => {
-            armed = true; handle.classList.add('pg-drag-armed'); source?.classList.add('pg-drag-armed');
-        }, 2000);
-        event.preventDefault(); event.stopPropagation();
+        event.preventDefault();
+        event.stopPropagation();
     });
+
     handle.addEventListener('pointermove', event => {
         if (pointer !== event.pointerId || !source) return;
         const distance = Math.hypot(event.clientX - startX, event.clientY - startY);
-        if (!armed) {
-            if (distance > 9) { cancelPending(); pointer = null; source = null; destination = null; clearMarks(); }
-            return;
-        }
-        if (!dragging && distance < 6) return;
-        dragging = true; clearMarks(); source.classList.add('pg-dragging');
+        if (!dragging && distance < 7) return;
+
+        dragging = true;
+        source.classList.add('pg-dragging');
+
+        // Resolve the insertion target from the pointer's actual position.
+        // No long-press gate and no overlay line that can be hidden by a finger.
         const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(itemSelector);
-        const sameList = kind === 'group' ? target?.dataset.groupId !== undefined : target?.dataset.groupId === groupId;
+        const sameList = kind === 'group'
+            ? !!target?.dataset.groupId
+            : target?.dataset.groupId === groupId;
+
         if (target && target !== source && sameList) {
             const rect = target.getBoundingClientRect();
             const after = event.clientY > rect.top + rect.height / 2;
-            target.classList.add(after ? 'pg-drop-after' : 'pg-drop-before');
-            destination = kind === 'group' ? { id: target.dataset.groupId, after } : { name: target.dataset.presetName, after };
-        } else destination = null;
+            destination = kind === 'group'
+                ? { id: target.dataset.groupId, after }
+                : { name: target.dataset.presetName, after };
+        } else {
+            destination = null;
+        }
+
         const scroller = source.closest('.pg-content');
         if (scroller) {
             const rect = scroller.getBoundingClientRect();
@@ -319,27 +330,39 @@ function makeDragHandle(kind, itemId, groupId = '') {
         }
         event.preventDefault();
     });
+
     function finish(cancel = false) {
         if (pointer === null) return;
-        cancelPending();
-        const target = destination, wasDragging = dragging;
-        pointer = null; source = null; destination = null; armed = false; dragging = false;
-        clearMarks();
+        const target = destination;
+        const wasDragging = dragging;
+        pointer = null;
+        source = null;
+        destination = null;
+        dragging = false;
+        clear();
+
         if (!cancel && wasDragging && target) {
             if (kind === 'group') moveGroup(itemId, target.id, target.after);
             else movePreset(groupId, itemId, target.name, target.after);
         }
     }
+
     handle.addEventListener('pointerup', event => {
-        if (event.pointerId === pointer) { finish(); event.preventDefault(); event.stopPropagation(); }
+        if (event.pointerId === pointer) {
+            finish();
+            event.preventDefault();
+            event.stopPropagation();
+        }
     });
     handle.addEventListener('pointercancel', () => finish(true));
     handle.addEventListener('lostpointercapture', () => finish(true));
     handle.addEventListener('keydown', event => {
-        if (!['ArrowUp','ArrowDown'].includes(event.key) || !ui.sortMode) return;
+        if (!['ArrowUp', 'ArrowDown'].includes(event.key) || !ui.sortMode) return;
         const items = [...document.querySelectorAll('#pg-panel ' + itemSelector)]
             .filter(el => kind === 'group' || el.dataset.groupId === groupId);
-        const pos = items.findIndex(el => kind === 'group' ? el.dataset.groupId === itemId : el.dataset.presetName === itemId);
+        const pos = items.findIndex(el => kind === 'group'
+            ? el.dataset.groupId === itemId
+            : el.dataset.presetName === itemId);
         const next = items[pos + (event.key === 'ArrowUp' ? -1 : 1)];
         if (next) {
             event.preventDefault();
@@ -990,7 +1013,7 @@ function renderPanel() {
     ui.panel.dataset.pgTheme = ui.data.theme || 'follow';
     const head = text('header', '', 'pg-head');
     const title = text('div', '', 'pg-title');
-    title.append(text('strong', '预设分组'), text('small', '分类 · 收藏 · 切换'));
+    title.append(text('strong', '预设分组'), text('small', '点击预设即可切换'));
     const actions = text('div', '', 'pg-head-actions');
     const themeWrap = text('div', '', 'pg-theme-wrap');
     const themeButton = htmlButton('', () => {
@@ -1031,7 +1054,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.2')); win.append(foot);
+    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.3')); win.append(foot);
     renderPanelContent();
     const rebuilt = $id('pg-panel-content'); if (rebuilt) rebuilt.scrollTop = previousTop;
     applyTheme();
@@ -1041,12 +1064,12 @@ function currentAllGroupIds() {
     const grouped = new Set();
     for (const group of sortGroups()) {
         const members = allNames().filter(name => membersFor(name).includes(group.id));
-        if (!members.length) continue;
-        ids.push(group.id);
+        if (ui.tab === 'groups' || members.length) ids.push(group.id);
         for (const name of members) grouped.add(name);
     }
-    if (allNames().some(name => !grouped.has(name))) ids.push('__independent__');
-    return ids;
+    if (ui.tab === 'groups') ids.push('__uncategorized__');
+    else if (allNames().some(name => !grouped.has(name))) ids.push('__independent__');
+    return [...new Set(ids)];
 }
 function stopAutoCollapseTimer() {
     if (ui.autoCollapseTimer) clearTimeout(ui.autoCollapseTimer);
@@ -1054,12 +1077,12 @@ function stopAutoCollapseTimer() {
 }
 function resetAutoCollapseTimer() {
     stopAutoCollapseTimer();
-    if (!ui.panelOpen || ui.tab !== 'all') return;
+    if (!ui.panelOpen || !['all', 'groups'].includes(ui.tab)) return;
     const hasExpanded = currentAllGroupIds().some(id => ui.data.collapsed[id] === false);
     if (!hasExpanded) return;
     ui.autoCollapseTimer = setTimeout(() => {
         ui.autoCollapseTimer = null;
-        if (!ui.panelOpen || ui.tab !== 'all') return;
+        if (!ui.panelOpen || !['all', 'groups'].includes(ui.tab)) return;
         for (const id of currentAllGroupIds()) ui.data.collapsed[id] = true;
         save();
         renderPanelContent();
@@ -1094,11 +1117,10 @@ function renderPanelContent() {
 
     if (ui.tab === 'all') {
         const toolbar = text('div', '', 'pg-content-toolbar');
-        toolbar.append(htmlButton(ui.sortMode ? '完成' : '↕', () => {
+        const actions = text('div', '', 'pg-toolbar-actions');
+        actions.append(htmlButton(ui.sortMode ? '完成' : '排序', () => {
             ui.sortMode = !ui.sortMode; renderPanelContent();
         }, `pg-sort-toggle${ui.sortMode ? ' is-active' : ''}`));
-        toolbar.append(text('small', ui.sortMode ? '长按左侧把手约2秒，拖动调整' : '点击按钮调整顺序', 'pg-sort-hint'));
-        const actions = text('div', '', 'pg-toolbar-actions');
         actions.append(htmlButton('全部展开', () => setAllGroupsExpanded(true), 'pg-toolbar-small-btn'));
         actions.append(htmlButton('全部收起', () => setAllGroupsExpanded(false), 'pg-toolbar-small-btn'));
         if (ui.sortMode) actions.append(htmlButton('恢复默认排序', () => {
@@ -1181,7 +1203,7 @@ function renderPanelContent() {
         if (!names.length) content.append(text('p', '没有匹配的预设。', 'pg-empty'));
     }
     content.scrollTop = oldTop;
-    if (ui.tab === 'all') resetAutoCollapseTimer();
+    if (['all', 'groups'].includes(ui.tab)) resetAutoCollapseTimer();
     else stopAutoCollapseTimer();
 }
 function clearFloatingTuckTimer() {
@@ -1205,76 +1227,173 @@ function scheduleFloatingTuck() {
         if (!ui.panelOpen) tuckFloating();
     }, 1000);
 }
+function clampFloatingTop(top, height) {
+    return Math.max(4, Math.min(Math.max(4, window.innerHeight - height - 4), top));
+}
+function clampFloatingLeft(left, width) {
+    return Math.max(4, Math.min(Math.max(4, window.innerWidth - width - 4), left));
+}
 function mountFloating() {
     if (!ui.data?.floatingEnabled) {
-        clearFloatingTuckTimer(); ui.floating?.remove(); ui.floating = null; return;
+        clearFloatingTuckTimer();
+        if (ui.floatingResizeHandler) {
+            window.removeEventListener('resize', ui.floatingResizeHandler);
+            ui.floatingResizeHandler = null;
+        }
+        ui.floating?.remove();
+        ui.floating = null;
+        return;
     }
     if (ui.floating?.isConnected) { applyTheme(); return; }
+
     const ball = htmlButton('预', () => {}, 'pg-floating-button');
-    ball.id = 'pg-floating'; ball.title = '打开预设分组'; ball.setAttribute('aria-label', '打开预设分组');
-    let pointer = null, startX = 0, startY = 0, originLeft = 0, originTop = 0, moved = false;
+    ball.id = 'pg-floating';
+    ball.title = '打开预设分组';
+    ball.setAttribute('aria-label', '打开预设分组');
+
+    let pointer = null, startX = 0, startY = 0, originLeft = 0, originTop = 0;
+    let originSide = null, moved = false;
 
     ball.addEventListener('click', event => {
         if (ball.dataset.suppressClick === '1') {
-            delete ball.dataset.suppressClick; event.preventDefault(); event.stopPropagation(); return;
+            delete ball.dataset.suppressClick;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
         }
-        togglePanel();
+        const isTucked = ball.classList.contains('pg-floating-tucked-left') ||
+            ball.classList.contains('pg-floating-tucked-right');
+        if (isTucked) openPanel();
+        else togglePanel();
     });
+
     ball.addEventListener('pointerdown', event => {
         if (event.button !== 0 || pointer !== null) return;
         clearFloatingTuckTimer();
-        pointer = event.pointerId; moved = false;
+        pointer = event.pointerId;
+        moved = false;
+        originSide = ui.data.floatingSide;
         const rect = ball.getBoundingClientRect();
-        const savedLeft = Number.isFinite(ui.data.floatingPosition?.left) ? ui.data.floatingPosition.left : rect.left;
-        const savedTop = Number.isFinite(ui.data.floatingPosition?.top) ? ui.data.floatingPosition.top : rect.top;
-        ball.classList.remove('pg-floating-tucked-left', 'pg-floating-tucked-right');
-        originLeft = savedLeft; originTop = savedTop;
-        ball.style.left = `${originLeft}px`; ball.style.top = `${originTop}px`;
-        ball.style.right = 'auto'; ball.style.bottom = 'auto';
-        startX = event.clientX; startY = event.clientY;
+        originLeft = Number.isFinite(ui.data.floatingPosition?.left)
+            ? ui.data.floatingPosition.left : rect.left;
+        originTop = Number.isFinite(ui.data.floatingPosition?.top)
+            ? ui.data.floatingPosition.top : rect.top;
+        startX = event.clientX;
+        startY = event.clientY;
         try { ball.setPointerCapture(pointer); } catch {}
-    });
-    ball.addEventListener('pointermove', event => {
-        if (event.pointerId !== pointer) return;
-        if (!moved && Math.hypot(event.clientX - startX, event.clientY - startY) < 7) return;
-        moved = true; ball.classList.remove('pg-floating-tucked-left', 'pg-floating-tucked-right');
-        ball.classList.add('pg-floating-dragging');
-        const left = Math.max(0, Math.min(window.innerWidth - ball.offsetWidth, originLeft + event.clientX - startX));
-        const top = Math.max(4, Math.min(window.innerHeight - ball.offsetHeight - 4, originTop + event.clientY - startY));
-        ball.style.left = `${left}px`; ball.style.top = `${top}px`;
+        // Keep a tucked ball tucked on pointerdown. A tap must reach click;
+        // only a real drag expands it, preventing the former two-tap behavior.
         event.preventDefault();
     });
+
+    ball.addEventListener('pointermove', event => {
+        if (event.pointerId !== pointer) return;
+        const distance = Math.hypot(event.clientX - startX, event.clientY - startY);
+        if (!moved && distance < 7) return;
+        if (!moved) {
+            moved = true;
+            ball.classList.remove('pg-floating-tucked-left', 'pg-floating-tucked-right');
+            ball.classList.add('pg-floating-dragging');
+        }
+        const left = clampFloatingLeft(originLeft + event.clientX - startX, ball.offsetWidth);
+        const top = clampFloatingTop(originTop + event.clientY - startY, ball.offsetHeight);
+        ball.style.left = `${left}px`;
+        ball.style.top = `${top}px`;
+        ball.style.right = 'auto';
+        ball.style.bottom = 'auto';
+        event.preventDefault();
+    });
+
     const finish = (event, cancelled = false) => {
         if (pointer === null || (event?.pointerId !== undefined && event.pointerId !== pointer)) return;
-        const wasMoved = moved; pointer = null; ball.classList.remove('pg-floating-dragging');
-        if (wasMoved) {
+        const wasMoved = moved;
+        pointer = null;
+        ball.classList.remove('pg-floating-dragging');
+
+        if (wasMoved && !cancelled) {
             const rect = ball.getBoundingClientRect();
-            let left = rect.left, side = null;
-            const edgeThreshold = 48;
-            if (!cancelled && rect.left <= edgeThreshold) { side = 'left'; left = 4; }
-            else if (!cancelled && window.innerWidth - rect.right <= edgeThreshold) {
-                side = 'right'; left = window.innerWidth - ball.offsetWidth - 4;
-            }
-            ball.style.left = `${left}px`; ball.style.top = `${rect.top}px`;
-            ui.data.floatingPosition = { left, top: rect.top };
+            const leftGap = Math.max(0, rect.left);
+            const rightGap = Math.max(0, window.innerWidth - rect.right);
+            const side = leftGap <= rightGap ? 'left' : 'right';
+            const left = side === 'left' ? 4 : window.innerWidth - ball.offsetWidth - 4;
+            const top = clampFloatingTop(rect.top, ball.offsetHeight);
+
+            ball.style.left = `${left}px`;
+            ball.style.top = `${top}px`;
+            ball.style.right = 'auto';
+            ball.style.bottom = 'auto';
             ui.data.floatingSide = side;
-            if (side) tuckFloating();
+            ui.data.floatingPosition = { left, top };
+            tuckFloating();
+            ball.dataset.suppressClick = '1';
+            save();
+        } else if (wasMoved && cancelled) {
+            ball.style.left = `${originLeft}px`;
+            ball.style.top = `${originTop}px`;
+            ball.style.right = 'auto';
+            ball.style.bottom = 'auto';
+            ui.data.floatingSide = originSide;
+            if (originSide) tuckFloating();
             else ball.classList.remove('pg-floating-tucked-left', 'pg-floating-tucked-right');
-            ball.dataset.suppressClick = '1'; save();
         }
         moved = false;
     };
+
     ball.addEventListener('pointerup', event => finish(event, false));
     ball.addEventListener('pointercancel', event => finish(event, true));
     ball.addEventListener('lostpointercapture', event => finish(event, true));
-    document.body.append(ball); ui.floating = ball;
-    const position = ui.data.floatingPosition;
-    if (position && Number.isFinite(position.left) && Number.isFinite(position.top)) {
-        const left = Math.max(0, Math.min(window.innerWidth - ball.offsetWidth, position.left));
-        const top = Math.max(4, Math.min(window.innerHeight - ball.offsetHeight - 4, position.top));
-        ball.style.left = `${left}px`; ball.style.top = `${top}px`; ball.style.right = 'auto'; ball.style.bottom = 'auto';
-        if (ui.data.floatingSide === 'left' || ui.data.floatingSide === 'right') tuckFloating();
+
+    document.body.append(ball);
+    ui.floating = ball;
+
+    const saved = ui.data.floatingPosition;
+    let left, top;
+    if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+        left = clampFloatingLeft(saved.left, ball.offsetWidth);
+        top = clampFloatingTop(saved.top, ball.offsetHeight);
+    } else {
+        // First install: use the old bottom-right default, then tuck it to the edge.
+        left = window.innerWidth - ball.offsetWidth - 4;
+        top = clampFloatingTop(window.innerHeight - ball.offsetHeight - 108, ball.offsetHeight);
     }
+
+    let side = ['left', 'right'].includes(ui.data.floatingSide) ? ui.data.floatingSide : null;
+    if (!side) {
+        const leftGap = left;
+        const rightGap = window.innerWidth - (left + ball.offsetWidth);
+        if (!saved || Math.min(leftGap, rightGap) <= 72) {
+            side = leftGap <= rightGap ? 'left' : 'right';
+        }
+    }
+    if (side === 'left') left = 4;
+    if (side === 'right') left = window.innerWidth - ball.offsetWidth - 4;
+
+    ball.style.left = `${left}px`;
+    ball.style.top = `${top}px`;
+    ball.style.right = 'auto';
+    ball.style.bottom = 'auto';
+    ui.data.floatingSide = side;
+    ui.data.floatingPosition = { left, top };
+    if (side) tuckFloating();
+    save();
+
+    ui.floatingResizeHandler = () => {
+        if (!ui.floating?.isConnected || pointer !== null) return;
+        const rect = ball.getBoundingClientRect();
+        const savedTop = Number.isFinite(ui.data.floatingPosition?.top)
+            ? ui.data.floatingPosition.top : rect.top;
+        const nextTop = clampFloatingTop(savedTop, ball.offsetHeight);
+        let nextLeft;
+        if (ui.data.floatingSide === 'left') nextLeft = 4;
+        else if (ui.data.floatingSide === 'right') nextLeft = window.innerWidth - ball.offsetWidth - 4;
+        else nextLeft = clampFloatingLeft(rect.left, ball.offsetWidth);
+        ball.style.left = `${nextLeft}px`;
+        ball.style.top = `${nextTop}px`;
+        ui.data.floatingPosition = { left: nextLeft, top: nextTop };
+        save();
+        if (ui.data.floatingSide) tuckFloating();
+    };
+    window.addEventListener('resize', ui.floatingResizeHandler, { passive: true });
     applyTheme();
 }
 function mountMenu() {
@@ -1362,7 +1481,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.2 已加载');
+    console.info('[预设分组] v0.2.3 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
