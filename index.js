@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.7
+ * 预设分组 / Preset Groups v0.2.8
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -1037,52 +1037,44 @@ function ensurePresetOptionWithoutSelecting(name, preset, preferredIndex = null)
     if (!manager || !ui.native) throw new Error('当前预设列表不可用');
     const { presets, preset_names } = manager.getPresetList('openai');
 
-    if (Object.prototype.hasOwnProperty.call(preset_names, name)) {
-        const index = preset_names[name];
+    // Chat Completion uses an object of name -> array index. Unlike keyed APIs,
+    // deletePreset() removes only that name's mapping and its option; it does
+    // NOT splice the preset array. Never shift indexes for this API.
+    const hasName = Object.prototype.hasOwnProperty.call(preset_names, name);
+    const occupied = index => Object.entries(preset_names).some(
+        ([other, value]) => other !== name && Number(value) === index
+    );
+
+    let index;
+    if (hasName) {
+        index = Number(preset_names[name]);
+        if (!Number.isInteger(index) || index < 0) throw new Error('预设索引异常，请刷新 TT');
         if (presets[index] === undefined) presets[index] = preset;
-        const existingOption = [...ui.native.options].find(option => option.textContent === name);
-        if (!existingOption) {
-            const option = document.createElement('option');
-            option.value = String(index);
-            option.textContent = name;
-            option.selected = false;
-            ui.native.append(option);
+    } else {
+        const preferred = Number.isInteger(preferredIndex) && preferredIndex >= 0
+            ? preferredIndex : null;
+        if (preferred !== null && preferred <= presets.length && !occupied(preferred)) {
+            index = preferred;
+            presets[index] = preset;
+        } else {
+            index = presets.length;
+            presets.push(preset);
         }
-        return;
+        preset_names[name] = index;
     }
 
-    // Restore a removed preset at its former index without pointing another
-    // preset name at the wrong array slot after deletePreset() has spliced it out.
-    const index = Number.isInteger(preferredIndex) && preferredIndex >= 0
-        ? Math.min(preferredIndex, presets.length)
-        : presets.length;
-    presets.splice(index, 0, preset);
-
-    for (const [existingName, existingIndex] of Object.entries(preset_names)) {
-        if (Number.isInteger(existingIndex) && existingIndex >= index) {
-            preset_names[existingName] = existingIndex + 1;
-        }
+    const option = [...ui.native.options].find(item =>
+        item.textContent === name || String(item.value) === String(index)
+    );
+    if (!option || option.textContent !== name) {
+        const created = document.createElement('option');
+        created.value = String(index);
+        created.textContent = name;
+        created.selected = false;
+        ui.native.append(created);
+    } else {
+        option.value = String(index);
     }
-    preset_names[name] = index;
-
-    // The native select uses array indices as option values. Keep every
-    // existing option synchronized after inserting the restored array item.
-    for (const option of ui.native.options) {
-        const optionName = option.textContent;
-        if (Object.prototype.hasOwnProperty.call(preset_names, optionName)) {
-            option.value = String(preset_names[optionName]);
-        }
-    }
-
-    const option = document.createElement('option');
-    option.value = String(index);
-    option.textContent = name;
-    option.selected = false;
-    const nextOption = [...ui.native.options].find(existing => {
-        const existingIndex = preset_names[existing.textContent];
-        return Number.isInteger(existingIndex) && existingIndex > index;
-    });
-    ui.native.insertBefore(option, nextOption || null);
 }
 async function retargetPresetReferences(oldName, newName) {
     if (!window.__TAURITAVERN__) return;
@@ -1111,9 +1103,9 @@ function replacePresetReferencesInSettings(oldName, newName) {
             for (let i = 0; i < order.length; i++) if (order[i] === oldName) order[i] = newName;
         }
     }
-    for (const group of ui.data.groups || []) {
-        if (group.anchor === oldName) group.anchor = newName;
-    }
+    // A group anchor is a historical matching clue, not its visible title.
+    // Renaming the anchor preset must not turn e.g. "灰烬之桥" into "1"
+    // and break future auto-classification of that original series.
     ui.data.pendingMatches = (ui.data.pendingMatches || []).map(match => ({
         ...match,
         name: match.name === oldName ? newName : match.name,
@@ -1135,11 +1127,17 @@ async function renamePresetWithoutSwitching(oldName, newName) {
         if (typeof manager.renamePreset !== 'function') {
             throw new Error('当前 TT 版本没有提供安全的当前预设重命名接口');
         }
+        // Native rename triggers a change event while updating its selector.
+        // Suppress our unsaved-change interception only for that native transaction.
+        if (ui.busy) throw new Error('正在切换预设，请完成当前操作后重试');
+        ui.busy = true;
         try {
             await manager.renamePreset(newName);
         } catch (error) {
             syncActive(); refreshAll();
             throw error;
+        } finally {
+            ui.busy = false;
         }
     } else {
         const storedPreset = getStoredPreset(oldName);
@@ -1351,6 +1349,11 @@ function showGroupMemberPicker(group) {
             ];
         }
 
+        if (!addedNames.length && !removedNames.length) {
+            scrim.remove();
+            return;
+        }
+
         ui.data.collapsed[group.id] = false;
         if (addedNames.length) {
             ui.pendingPanelFocus = {
@@ -1553,7 +1556,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.7')); win.append(foot);
+    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.8')); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
 }
@@ -1987,7 +1990,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.7 已加载');
+    console.info('[预设分组] v0.2.8 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
