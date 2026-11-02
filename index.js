@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.5
+ * 预设分组 / Preset Groups v0.2.7
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -1987,7 +1987,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.5 已加载');
+    console.info('[预设分组] v0.2.7 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
