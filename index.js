@@ -1036,20 +1036,53 @@ function ensurePresetOptionWithoutSelecting(name, preset, preferredIndex = null)
     const manager = ui.pm || getManager();
     if (!manager || !ui.native) throw new Error('当前预设列表不可用');
     const { presets, preset_names } = manager.getPresetList('openai');
-    if (Object.prototype.hasOwnProperty.call(preset_names, name)) return;
-    let index = Number.isInteger(preferredIndex) && preferredIndex >= 0 && preferredIndex < presets.length
-        ? preferredIndex : presets.length;
-    if (presets[index] === undefined) presets[index] = preset;
-    else if (presets[index] !== preset && preferredIndex === null) {
-        index = presets.length;
-        presets.push(preset);
+
+    if (Object.prototype.hasOwnProperty.call(preset_names, name)) {
+        const index = preset_names[name];
+        if (presets[index] === undefined) presets[index] = preset;
+        const existingOption = [...ui.native.options].find(option => option.textContent === name);
+        if (!existingOption) {
+            const option = document.createElement('option');
+            option.value = String(index);
+            option.textContent = name;
+            option.selected = false;
+            ui.native.append(option);
+        }
+        return;
+    }
+
+    // Restore a removed preset at its former index without pointing another
+    // preset name at the wrong array slot after deletePreset() has spliced it out.
+    const index = Number.isInteger(preferredIndex) && preferredIndex >= 0
+        ? Math.min(preferredIndex, presets.length)
+        : presets.length;
+    presets.splice(index, 0, preset);
+
+    for (const [existingName, existingIndex] of Object.entries(preset_names)) {
+        if (Number.isInteger(existingIndex) && existingIndex >= index) {
+            preset_names[existingName] = existingIndex + 1;
+        }
     }
     preset_names[name] = index;
+
+    // The native select uses array indices as option values. Keep every
+    // existing option synchronized after inserting the restored array item.
+    for (const option of ui.native.options) {
+        const optionName = option.textContent;
+        if (Object.prototype.hasOwnProperty.call(preset_names, optionName)) {
+            option.value = String(preset_names[optionName]);
+        }
+    }
+
     const option = document.createElement('option');
     option.value = String(index);
     option.textContent = name;
     option.selected = false;
-    ui.native.append(option);
+    const nextOption = [...ui.native.options].find(existing => {
+        const existingIndex = preset_names[existing.textContent];
+        return Number.isInteger(existingIndex) && existingIndex > index;
+    });
+    ui.native.insertBefore(option, nextOption || null);
 }
 async function retargetPresetReferences(oldName, newName) {
     if (!window.__TAURITAVERN__) return;
