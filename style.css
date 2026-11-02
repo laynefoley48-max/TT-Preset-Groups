@@ -146,7 +146,7 @@
 }
 .pg-name-editor .pg-name-editor-actions button { min-width:72px; }
 
-/* 0.2.6: inline rename controls and scroll-anchor restoration. */
+/* 0.2.7: inline rename controls and nested scroll-anchor restoration. */
 #pg-quick, #pg-panel, .pg-confirm-backdrop, #pg-floating {
   --pg-surface-1: color-mix(in srgb, var(--pg-text) 4%, var(--pg-bg));
   --pg-surface-2: color-mix(in srgb, var(--pg-text) 8%, var(--pg-bg));
