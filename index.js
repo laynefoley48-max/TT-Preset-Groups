@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.8
+ * 预设分组 / Preset Groups v0.2.9
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -655,7 +655,7 @@ function buildConfirm(oldName, newName, state) {
         choices.append(htmlButton('不保存并切换', () => finish('discard'), 'pg-secondary'));
         dialog.append(choices);
         dialog.append(htmlButton('取消切换', () => finish('cancel'), 'pg-cancel'));
-        backdrop.append(dialog); document.body.append(backdrop);
+        backdrop.append(dialog); appendOverlay(backdrop);
     });
 }
 async function saveCurrent() {
@@ -843,11 +843,48 @@ function mountNative() {
     refreshAll();
     return true;
 }
+
+/**
+ * Put free-floating dialogs outside body so custom ST themes that transform,
+ * filter or scale body cannot change the containing block of fixed overlays.
+ */
+function appendOverlay(node) {
+    document.documentElement.append(node);
+    syncViewportOverlays();
+}
+
+/**
+ * Android browsers may report a layout viewport larger than the visible one
+ * (notably after browser chrome or the soft keyboard changes size).
+ * Center dialogs in the visual viewport, keeping every edge reachable.
+ */
+function syncViewportOverlays() {
+    const viewport = window.visualViewport;
+    const width = Math.max(1, viewport?.width || window.innerWidth || document.documentElement.clientWidth);
+    const height = Math.max(1, viewport?.height || window.innerHeight || document.documentElement.clientHeight);
+    const top = Number.isFinite(viewport?.offsetTop) ? viewport.offsetTop : 0;
+    const left = Number.isFinite(viewport?.offsetLeft) ? viewport.offsetLeft : 0;
+    for (const overlay of document.querySelectorAll('#pg-panel, .pg-confirm-backdrop')) {
+        overlay.style.inset = 'auto';
+        overlay.style.top = `${top}px`;
+        overlay.style.left = `${left}px`;
+        overlay.style.right = 'auto';
+        overlay.style.bottom = 'auto';
+        overlay.style.width = `${width}px`;
+        overlay.style.height = `${height}px`;
+        overlay.style.maxWidth = 'none';
+        overlay.style.maxHeight = 'none';
+        const windowBox = overlay.querySelector(':scope > .pg-window, :scope > .pg-confirm-box, :scope > .pg-editor-dialog');
+        if (windowBox) windowBox.style.maxHeight = `${Math.max(1, height - 30)}px`;
+    }
+}
+
 function openPanel() {
     if (!ui.panel) createPanel();
     clearTimeout(ui.floatingTuckTimer); ui.floatingTuckTimer = null;
     untuckFloating();
     ui.panel.hidden = false; ui.panelOpen = true;
+    syncViewportOverlays();
     applyTheme(); document.body.classList.add('pg-panel-visible'); renderPanel();
 }
 function closePanel() {
@@ -867,7 +904,7 @@ function createPanel() {
     }
     const windowBox = text('section', '', 'pg-window');
     windowBox.setAttribute('role', 'dialog'); windowBox.setAttribute('aria-label', '预设分组管理');
-    scrim.append(windowBox); document.body.append(scrim); ui.panel = scrim;
+    scrim.append(windowBox); appendOverlay(scrim); ui.panel = scrim;
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape' && ui.helpOpen) { closeHelp(); return; }
         if (e.key === 'Escape' && ui.panelOpen && !ui.confirmOpen) closePanel();
@@ -976,7 +1013,7 @@ function showGroupsEditor(name) {
         scrim.remove();
         if (changed) refreshAll();
     }, 'pg-cancel'));
-    scrim.append(dialog); document.body.append(scrim);
+    scrim.append(dialog); appendOverlay(scrim);
     scrim.addEventListener('click', event => {
         if (event.target === scrim) closeEditor();
     });
@@ -1024,7 +1061,7 @@ function showTextEditDialog(title, initialValue, placeholder, onSave) {
     saveButton = htmlButton('保存', () => { void saveAction(); }, 'pg-primary');
     actions.append(saveButton);
     dialog.append(actions);
-    scrim.append(dialog); document.body.append(scrim);
+    scrim.append(dialog); appendOverlay(scrim);
     scrim.addEventListener('click', event => { if (event.target === scrim) scrim.remove(); });
     input.addEventListener('keydown', event => {
         if (event.key === 'Enter') { event.preventDefault(); void saveAction(); }
@@ -1440,7 +1477,7 @@ function showHelp() {
 
     dialog.append(body);
     scrim.append(dialog);
-    document.body.append(scrim);
+    appendOverlay(scrim);
     ui.helpScrim = scrim;
     ui.helpOpen = true;
     scrim.addEventListener('click', event => {
@@ -1556,7 +1593,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.8')); win.append(foot);
+    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.9')); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
 }
@@ -1968,6 +2005,9 @@ async function init() {
     syncImportedPresets(true);
     if (ui.needsCollapseReset) applyCollapsedDefaults();
     mountFloating(); applyTheme();
+    window.addEventListener('resize', syncViewportOverlays, { passive: true });
+    window.visualViewport?.addEventListener('resize', syncViewportOverlays, { passive: true });
+    window.visualViewport?.addEventListener('scroll', syncViewportOverlays, { passive: true });
     const { eventSource, event_types } = ui.ctx;
     if (eventSource && event_types) {
         if (event_types.PRESET_CHANGED) eventSource.on(event_types.PRESET_CHANGED, onPresetChanged);
@@ -1990,7 +2030,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.8 已加载');
+    console.info('[预设分组] v0.2.9 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
