@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.4
+ * 预设分组 / Preset Groups v0.2.5
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -730,9 +730,21 @@ function renderQuick() {
     header.setAttribute('aria-expanded', String(!!ui.data.gridOpen));
     header.title = ui.data.gridOpen ? '收起分组筛选' : '展开分组筛选';
     const count = ui.data.selectedGroups.length;
-    header.append(text('span', '预设分组', 'pg-quick-title'));
-    header.append(text('small', '点击悬浮按钮进行分组，悬浮按钮在扩展栏中打开。', 'pg-quick-guide'));
-    header.append(text('span', count ? `${count} 已选` : '未筛选', 'pg-quick-meta'));
+    const copy = text('span', '', 'pg-quick-copy');
+    copy.append(text('span', '预设分组', 'pg-quick-title'));
+    const guide = text('span', '', 'pg-quick-guide');
+    guide.append(
+        text('span', '点击悬浮按钮进行分组'),
+        text('span', '悬浮按钮在扩展栏中打开')
+    );
+    copy.append(guide);
+    const tail = text('span', '', 'pg-quick-tail');
+    tail.append(
+        text('span', count ? `${count} 已选` : '未筛选', 'pg-quick-meta'),
+        text('span', '·', 'pg-quick-dot'),
+        text('span', ui.data.gridOpen ? '⌃' : '⌄', 'pg-quick-chevron')
+    );
+    header.append(copy, tail);
     ui.quick.append(header);
     if (!ui.data.gridOpen) return;
 
@@ -1127,7 +1139,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.4')); win.append(foot);
+    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.5')); win.append(foot);
     renderPanelContent();
     const rebuilt = $id('pg-panel-content'); if (rebuilt) rebuilt.scrollTop = previousTop;
     applyTheme();
@@ -1185,22 +1197,28 @@ function renderPanelContent() {
     }
     const names = allNames().filter(name => normalized(name).includes(normalized(ui.query)));
     const all = allNames();
-    content.append(text('p', `共 ${all.length} 个预设 · ${ui.data.groups.length} 个分组 · 当前：${ui.activeName || '无'}`, 'pg-summary'));
+    const summary = text('div', '', 'pg-summary');
+    summary.append(text('div', `共 ${all.length} 个预设 · ${ui.data.groups.length} 个分组`, 'pg-summary-count'));
+    const statusRow = text('div', '', 'pg-summary-status-row');
+    const currentName = ui.activeName || '无';
+    const current = text('div', `当前预设：${currentName}`, 'pg-summary-current');
+    current.title = `当前预设：${currentName}`;
+    statusRow.append(current);
 
     if (['all', 'groups'].includes(ui.tab)) {
-        const toolbar = text('div', '', 'pg-content-toolbar');
         const actions = text('div', '', 'pg-toolbar-actions');
         actions.append(htmlButton(ui.sortMode ? '完成' : '排序', () => {
             ui.sortMode = !ui.sortMode; renderPanelContent();
         }, `pg-sort-toggle${ui.sortMode ? ' is-active' : ''}`));
         actions.append(htmlButton('全部展开', () => setAllGroupsExpanded(true), 'pg-toolbar-small-btn'));
         actions.append(htmlButton('全部收起', () => setAllGroupsExpanded(false), 'pg-toolbar-small-btn'));
-        if (ui.sortMode) actions.append(htmlButton('恢复默认排序', () => {
+        if (ui.sortMode) actions.append(htmlButton('恢复默认', () => {
             ui.data.groupOrder = []; ui.data.presetOrder = {}; ui.sortMode = false; save(); refreshAll();
         }, 'pg-toolbar-small-btn pg-reset-sort'));
-        toolbar.append(actions);
-        content.append(toolbar);
+        statusRow.append(actions);
     }
+    summary.append(statusRow);
+    content.append(summary);
 
     if (ui.tab === 'fav') {
         const favorites = names.filter(name => ui.data.favorites.includes(name)).sort(collator.compare);
@@ -1552,7 +1570,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.4 已加载');
+    console.info('[预设分组] v0.2.5 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
