@@ -132,7 +132,8 @@ const defaults = () => ({
     collapsed: {},
     protection: true,
     theme: 'follow',
-    floatingEnabled: false,
+    floatingEnabled: true,
+    floatingEnabledUserSet: false,
     floatingPosition: null,
     presetOrder: {},
     newPresets: [],
@@ -182,11 +183,16 @@ function getData() {
     const bag = ui.ctx.extensionSettings;
     if (!bag[SLUG] || typeof bag[SLUG] !== 'object') bag[SLUG] = defaults();
     const stored = bag[SLUG];
+    const migrateFloatingDefault = !Object.prototype.hasOwnProperty.call(stored, 'floatingEnabledUserSet');
     ui.needsCollapseReset = Number(stored.collapseDefaultsVersion || 0) < COLLAPSE_DEFAULTS_VERSION;
     ui.needsClassificationRebuild = Number(stored.classificationAlgorithmVersion || 0) < CLASSIFICATION_ALGORITHM_VERSION;
     const def = defaults();
     for (const [key, val] of Object.entries(def)) {
         if (stored[key] === undefined) stored[key] = val;
+    }
+    if (migrateFloatingDefault) {
+        stored.floatingEnabled = true;
+        stored.floatingEnabledUserSet = false;
     }
     if (!stored.collapsed || typeof stored.collapsed !== 'object') stored.collapsed = {};
     if (!stored.manualOverrides || typeof stored.manualOverrides !== 'object') stored.manualOverrides = {};
@@ -873,13 +879,36 @@ function showGroupsEditor(name) {
     dialog.append(text('h3', '所属分组'));
     dialog.append(text('p', name, 'pg-editor-name'));
     const choices = text('div', '', 'pg-editor-groups');
+    const original = new Set(membersFor(name));
+    const chosen = new Set(original);
+    const createdGroups = [];
+    let committed = false;
+
+    function discardCreatedGroups() {
+        if (committed || !createdGroups.length) return;
+        const ids = new Set(createdGroups.map(group => group.id));
+        ui.data.groups = ui.data.groups.filter(group => !ids.has(group.id));
+        ui.data.groupOrder = (ui.data.groupOrder || []).filter(id => !ids.has(id));
+        for (const id of ids) {
+            delete ui.data.collapsed[id];
+            delete ui.data.presetOrder[id];
+        }
+        save();
+    }
+    function closeEditor() {
+        discardCreatedGroups();
+        scrim.remove();
+    }
     function draw() {
         choices.replaceChildren();
         for (const group of sortGroups()) {
             const line = text('label', '', 'pg-checkline');
             const check = document.createElement('input'); check.type = 'checkbox';
-            check.checked = membersFor(name).includes(group.id);
-            check.addEventListener('change', () => addMembership(name, group.id, check.checked));
+            check.checked = chosen.has(group.id);
+            check.addEventListener('change', () => {
+                if (check.checked) chosen.add(group.id);
+                else chosen.delete(group.id);
+            });
             line.append(check, text('span', group.name)); choices.append(line);
         }
         if (!ui.data.groups.length) choices.append(text('p', '暂时没有分组。先创建一个吧。', 'pg-muted'));
@@ -891,20 +920,221 @@ function showGroupsEditor(name) {
         const nameNew = input.value.trim();
         if (!nameNew) return;
         const existing = ui.data.groups.find(g => g.name === nameNew);
-        if (existing) { addMembership(name, existing.id, true); }
-        else {
+        if (existing) {
+            chosen.add(existing.id);
+        } else {
             const group = { id: makeId(), name: nameNew, type: 'manual', anchor: name };
-            ui.data.groups.push(group); addMembership(name, group.id, true);
+            ui.data.groups.push(group);
+            createdGroups.push(group);
+            chosen.add(group.id);
         }
         input.value = ''; draw();
     }, 'pg-primary');
+    input.addEventListener('keydown', event => { if (event.key === 'Enter') add.click(); });
     newRow.append(input, add); dialog.append(newRow);
-    dialog.append(htmlButton('完成', () => { scrim.remove(); refreshAll(); }, 'pg-cancel'));
+    dialog.append(htmlButton('完成', () => {
+        for (const group of createdGroups) {
+            if (chosen.has(group.id)) continue;
+            ui.data.groups = ui.data.groups.filter(item => item.id !== group.id);
+            ui.data.groupOrder = (ui.data.groupOrder || []).filter(id => id !== group.id);
+            delete ui.data.collapsed[group.id];
+            delete ui.data.presetOrder[group.id];
+        }
+        const next = [...chosen].filter(id => ui.data.groups.some(group => group.id === id));
+        for (const id of next) {
+            if (!original.has(id)) ui.data.collapsed[id] = false;
+            if ((ui.data.newPresets || []).includes(name)) {
+                const old = ui.data.presetOrder[id] || [];
+                ui.data.presetOrder[id] = [name, ...old.filter(item => item !== name)];
+            }
+        }
+        ui.data.memberships[name] = next;
+        ui.data.manualOverrides[name] = true;
+        committed = true;
+        save(); scrim.remove(); refreshAll();
+    }, 'pg-cancel'));
     scrim.append(dialog); document.body.append(scrim);
-    scrim.addEventListener('click', e => { if (e.target === scrim) scrim.remove(); });
+    scrim.addEventListener('click', e => { if (e.target === scrim) closeEditor(); });
+}
+function showTextEditDialog(title, initialValue, placeholder, onSave) {
+    const scrim = text('div', '', 'pg-confirm-backdrop');
+    scrim.dataset.pgTheme = ui.data.theme || 'follow';
+    const dialog = text('section', '', 'pg-editor-dialog pg-name-editor');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.append(text('h3', title));
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = initialValue || '';
+    input.placeholder = placeholder || '';
+    input.maxLength = 100;
+    input.className = 'pg-name-editor-input';
+    dialog.append(input);
+
+    const actions = text('div', '', 'pg-name-editor-actions');
+    let saving = false;
+    let saveButton;
+    const saveAction = async () => {
+        if (saving) return;
+        const value = input.value.trim();
+        if (!value) return notify('名称不能为空', 'warning');
+        saving = true;
+        saveButton.disabled = true;
+        saveButton.textContent = '保存中…';
+        try {
+            const result = await onSave(value);
+            if (result !== false) scrim.remove();
+        } catch (error) {
+            console.error('[预设分组] 名称修改失败', error);
+            notify(error?.message || '修改失败，请稍后重试', 'error');
+        } finally {
+            saving = false;
+            if (saveButton.isConnected) {
+                saveButton.disabled = false;
+                saveButton.textContent = '保存';
+            }
+        }
+    };
+    actions.append(htmlButton('取消', () => scrim.remove(), 'pg-secondary'));
+    saveButton = htmlButton('保存', () => { void saveAction(); }, 'pg-primary');
+    actions.append(saveButton);
+    dialog.append(actions);
+    scrim.append(dialog); document.body.append(scrim);
+    scrim.addEventListener('click', event => { if (event.target === scrim) scrim.remove(); });
+    input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); void saveAction(); }
+        if (event.key === 'Escape') scrim.remove();
+    });
+    input.focus(); input.select();
+}
+function ensurePresetOptionWithoutSelecting(name, preset, preferredIndex = null) {
+    const manager = ui.pm || getManager();
+    if (!manager || !ui.native) throw new Error('当前预设列表不可用');
+    const { presets, preset_names } = manager.getPresetList('openai');
+    if (Object.prototype.hasOwnProperty.call(preset_names, name)) return;
+    let index = Number.isInteger(preferredIndex) && preferredIndex >= 0 && preferredIndex < presets.length
+        ? preferredIndex : presets.length;
+    if (presets[index] === undefined) presets[index] = preset;
+    else if (presets[index] !== preset && preferredIndex === null) {
+        index = presets.length;
+        presets.push(preset);
+    }
+    preset_names[name] = index;
+    const option = document.createElement('option');
+    option.value = String(index);
+    option.textContent = name;
+    option.selected = false;
+    ui.native.append(option);
+}
+async function retargetPresetReferences(oldName, newName) {
+    if (!window.__TAURITAVERN__) return;
+    const profileSync = await import('../../../tauritavern/agent/profile-preset-sync.js');
+    const skillSync = await import('../../../tauritavern/agent/skill-scope-sync.js');
+    await profileSync.retargetAgentProfilesAfterPresetRename({
+        apiId: 'openai', oldName, newName,
+    });
+    await skillSync.retargetPresetSkillsAfterRename({
+        apiId: 'openai', oldName, newName,
+    });
+}
+function replacePresetReferencesInSettings(oldName, newName) {
+    const moveKey = object => {
+        if (Object.prototype.hasOwnProperty.call(object, oldName)) {
+            object[newName] = object[oldName];
+            delete object[oldName];
+        }
+    };
+    moveKey(ui.data.memberships);
+    moveKey(ui.data.manualOverrides);
+    ui.data.favorites = [...new Set((ui.data.favorites || []).map(name => name === oldName ? newName : name))];
+    ui.data.newPresets = [...new Set((ui.data.newPresets || []).map(name => name === oldName ? newName : name))];
+    for (const order of Object.values(ui.data.presetOrder || {})) {
+        if (Array.isArray(order)) {
+            for (let i = 0; i < order.length; i++) if (order[i] === oldName) order[i] = newName;
+        }
+    }
+    for (const group of ui.data.groups || []) {
+        if (group.anchor === oldName) group.anchor = newName;
+    }
+    ui.data.pendingMatches = (ui.data.pendingMatches || []).map(match => ({
+        ...match,
+        name: match.name === oldName ? newName : match.name,
+        otherName: match.otherName === oldName ? newName : match.otherName,
+    }));
+    ui.data.knownPresets = allNames();
+    ui.data.knownPresetsInitialized = true;
+    if (ui.activeName === oldName) ui.activeName = newName;
+}
+async function renamePresetWithoutSwitching(oldName, newName) {
+    const manager = ui.pm || getManager();
+    if (!manager) throw new Error('没有找到 Chat Completion 预设管理器');
+    const oldValue = getValueByName(oldName);
+    if (oldValue === undefined) throw new Error('找不到这个预设，可能已经被删除或改名');
+    if (String(oldValue) === 'gui') throw new Error('内置 GUI 预设不能重命名');
+
+    const activeName = manager.getSelectedPresetName();
+    if (activeName === oldName) {
+        if (typeof manager.renamePreset !== 'function') {
+            throw new Error('当前 TT 版本没有提供安全的当前预设重命名接口');
+        }
+        try {
+            await manager.renamePreset(newName);
+        } catch (error) {
+            syncActive(); refreshAll();
+            throw error;
+        }
+    } else {
+        const storedPreset = getStoredPreset(oldName);
+        if (!storedPreset) throw new Error('无法读取该预设的原始配置，已取消重命名');
+        const preset = typeof structuredClone === 'function'
+            ? structuredClone(storedPreset) : JSON.parse(JSON.stringify(storedPreset));
+        const { preset_names } = manager.getPresetList('openai');
+        const oldIndex = preset_names[oldName];
+
+        await manager.savePreset(newName, preset, { skipUpdate: true });
+        try {
+            await retargetPresetReferences(oldName, newName);
+        } catch (error) {
+            ensurePresetOptionWithoutSelecting(newName, preset);
+            throw new Error('新名称已保存，但 TT 的关联引用更新失败；原预设仍保留，请检查后再处理。');
+        }
+
+        let removed = false;
+        try {
+            removed = await manager.deletePreset(oldName);
+        } catch (error) {
+            ensurePresetOptionWithoutSelecting(oldName, storedPreset, oldIndex);
+            ensurePresetOptionWithoutSelecting(newName, preset);
+            throw new Error('新名称已保存，但删除旧名称时发生错误；为避免丢失，两个名称暂时都保留。');
+        }
+        if (!removed) {
+            ensurePresetOptionWithoutSelecting(oldName, storedPreset, oldIndex);
+            ensurePresetOptionWithoutSelecting(newName, preset);
+            throw new Error('新名称已保存，但旧名称删除失败；两个预设暂时都保留，没有覆盖原配置。');
+        }
+        ensurePresetOptionWithoutSelecting(newName, preset);
+    }
+
+    replacePresetReferencesInSettings(oldName, newName);
+    save(); refreshAll();
+    notify(`已将预设「${oldName}」重命名为「${newName}」`, 'success');
+}
+function showPresetRenameDialog(name) {
+    showTextEditDialog('重命名预设', name, '输入新的预设名称', async newName => {
+        if (newName === name) return true;
+        const duplicate = allNames().find(item =>
+            item !== name && item.toLocaleLowerCase() === newName.toLocaleLowerCase());
+        if (duplicate) {
+            notify('这个预设名称已经存在，请换一个名称', 'warning');
+            return false;
+        }
+        await renamePresetWithoutSwitching(name, newName);
+        return true;
+    });
 }
 function makePresetRow(name, compact = false, groupId = null) {
     const row = text('div', '', 'pg-preset-row');
+    row.dataset.pgScrollKey = `preset:${name}`;
     if (ui.sortMode && groupId) {
         row.classList.add('pg-sortable-preset'); row.dataset.presetName = name; row.dataset.groupId = groupId;
         row.append(makeDragHandle('preset', name, groupId));
@@ -921,12 +1151,19 @@ function makePresetRow(name, compact = false, groupId = null) {
         ui.data.favorites = [...set]; save(); renderPanelContent();
     }, `pg-star${ui.data.favorites.includes(name) ? ' is-favorite' : ''}`);
     star.title = ui.data.favorites.includes(name) ? '取消收藏' : '收藏预设'; row.append(star);
+    if (!compact && !ui.sortMode && String(getValueByName(name)) !== 'gui') {
+        const rename = htmlButton('✎', () => showPresetRenameDialog(name), 'pg-row-rename');
+        rename.title = '重命名预设（不切换）';
+        rename.setAttribute('aria-label', `重命名预设：${name}`);
+        row.append(rename);
+    }
     if (!compact) row.append(htmlButton('分组', () => showGroupsEditor(name), 'pg-row-assign'));
     return row;
 }
 function groupCard(group, list, headingRight = '') {
     const section = text('section', '', 'pg-series-card');
     const realGroup = ui.data.groups.some(item => item.id === group.id);
+    section.dataset.pgScrollKey = `group:${group.id}`;
     if (realGroup) section.dataset.groupType = group.type || '';
     if (realGroup && ui.sortMode) { section.classList.add('pg-sortable-card'); section.dataset.groupId = group.id; }
     let collapsed = ui.data.collapsed[group.id] !== false;
@@ -950,17 +1187,31 @@ function groupCard(group, list, headingRight = '') {
     head.setAttribute('aria-expanded', String(!collapsed));
     head.append(text('span', `${collapsed ? '▸' : '▾'} ${group.name}`));
     head.append(text('span', headingRight || `${orderedList.length} 项`, 'pg-count'));
-    top.append(head); section.append(top);
+    top.append(head);
+    if (realGroup && !ui.sortMode) {
+        const edit = htmlButton('✎', () => renameGroup(group), 'pg-group-rename');
+        edit.title = '编辑分组名称';
+        edit.setAttribute('aria-label', `编辑分组名称：${group.name}`);
+        top.append(edit);
+    }
+    section.append(top);
     if (!collapsed) section.append(makeBody());
     return section;
 }
 function renameGroup(group) {
-    const newName = window.prompt('修改分组名称', group.name);
-    if (newName === null) return;
-    const cleaned = newName.trim();
-    if (!cleaned || ui.data.groups.some(g=>g.id!==group.id && g.name===cleaned))
-        return notify('名称不能为空或与现有分组重复', 'warning');
-    group.name=cleaned; group.userRenamed = true; group.confirmed = group.type === 'auto' ? true : group.confirmed; save(); refreshAll();
+    showTextEditDialog('编辑分组名称', group.name, '输入分组显示名称', value => {
+        if (ui.data.groups.some(item => item.id !== group.id && item.name === value)) {
+            notify('名称不能为空或与现有分组重复', 'warning');
+            return false;
+        }
+        // Keep the original matching anchor independent from the visible group name.
+        if (group.type === 'auto' && !group.anchor) group.anchor = group.name;
+        group.name = value;
+        group.userRenamed = true;
+        if (group.type === 'auto') group.confirmed = true;
+        save(); refreshAll();
+        return true;
+    });
 }
 function deleteGroup(group) {
     if (!window.confirm(`只删除分组「${group.name}」？其中的预设不会被删除。`)) return;
@@ -1023,9 +1274,10 @@ function showGroupMemberPicker(group) {
             }
             ui.data.manualOverrides[name]=true;
         }
+        if (chosen.size) ui.data.collapsed[group.id] = false;
         save(); scrim.remove(); refreshAll();
     }, 'pg-primary'));
-    dialog.append(actions); scrim.append(dialog); document.body.append(scrim);
+    dialog.append(actions); scrim.append(dialog);
     scrim.addEventListener('click',e=>{ if(e.target===scrim) scrim.remove(); });
 }
 function closeHelp() {
@@ -1088,9 +1340,35 @@ function showHelp() {
         if (event.target === scrim) closeHelp();
     });
 }
+function capturePanelScroll(content) {
+    if (!content) return null;
+    const top = content.scrollTop;
+    const viewport = content.getBoundingClientRect();
+    const anchor = [...content.children].find(element =>
+        element.dataset.pgScrollKey && element.getBoundingClientRect().bottom > viewport.top + 1);
+    if (!anchor) return { top };
+    return {
+        top,
+        key: anchor.dataset.pgScrollKey,
+        offset: anchor.getBoundingClientRect().top - viewport.top,
+    };
+}
+function restorePanelScroll(content, anchor) {
+    if (!content || !anchor) return;
+    if (anchor.key) {
+        const target = [...content.children].find(element => element.dataset.pgScrollKey === anchor.key);
+        if (target) {
+            const viewport = content.getBoundingClientRect();
+            const rect = target.getBoundingClientRect();
+            content.scrollTop = Math.max(0, content.scrollTop + rect.top - viewport.top - anchor.offset);
+            return;
+        }
+    }
+    content.scrollTop = anchor.top || 0;
+}
 function renderPanel() {
     if (!ui.panel || !ui.panelOpen) return;
-    const previousTop = $id('pg-panel-content')?.scrollTop ?? 0;
+    const scrollAnchor = capturePanelScroll($id('pg-panel-content'));
     const win = ui.panel.querySelector('.pg-window'); win.replaceChildren();
     ui.panel.dataset.pgTheme = ui.data.theme || 'follow';
     const head = text('header', '', 'pg-head');
@@ -1139,9 +1417,8 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.5')); win.append(foot);
-    renderPanelContent();
-    const rebuilt = $id('pg-panel-content'); if (rebuilt) rebuilt.scrollTop = previousTop;
+    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.6')); win.append(foot);
+    renderPanelContent(scrollAnchor);
     applyTheme();
 }
 function currentAllGroupIds() {
@@ -1186,10 +1463,11 @@ function applyCollapsedDefaults() {
     ui.needsCollapseReset = false;
     save();
 }
-function renderPanelContent() {
+function renderPanelContent(scrollAnchor = null) {
     const content = $id('pg-panel-content');
     if (!content) return;
-    const oldTop = content.scrollTop; content.replaceChildren();
+    const anchor = scrollAnchor || capturePanelScroll(content);
+    content.replaceChildren();
     if (!ui.native) {
         stopAutoCollapseTimer();
         content.append(text('p', '当前页面还未找到 Chat Completion 预设选择器。请打开 API 连接设置并选择 Chat Completion。', 'pg-muted'));
@@ -1272,7 +1550,6 @@ function renderPanelContent() {
                 const card = groupCard(group, groupMembers, `${groupMembers.length} 项`);
                 const actions = text('div', '', 'pg-group-actions');
                 actions.append(htmlButton('＋ 选择预设', () => showGroupMemberPicker(group), 'pg-primary pg-add-members'));
-                actions.append(htmlButton('改名', () => renameGroup(group), 'pg-text-btn'));
                 actions.append(htmlButton('删除', () => deleteGroup(group), 'pg-text-btn pg-danger'));
                 card.append(actions); content.append(card);
             }
@@ -1292,7 +1569,7 @@ function renderPanelContent() {
         if (alone.length) content.append(groupCard({ id: '__independent__', name: '独立预设' }, alone));
         if (!names.length) content.append(text('p', '没有匹配的预设。', 'pg-empty'));
     }
-    content.scrollTop = oldTop;
+    restorePanelScroll(content, anchor);
     if (['all', 'groups'].includes(ui.tab)) resetAutoCollapseTimer();
     else stopAutoCollapseTimer();
 }
@@ -1500,7 +1777,11 @@ function mountMenu() {
         const floatingLabel = text('label', '', 'checkbox_label');
         const floatingText = text('span', '显示悬浮球');
         const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = !!ui.data.floatingEnabled;
-        checkbox.addEventListener('change', () => { ui.data.floatingEnabled = checkbox.checked; save(); mountFloating(); });
+        checkbox.addEventListener('change', () => {
+            ui.data.floatingEnabled = checkbox.checked;
+            ui.data.floatingEnabledUserSet = true;
+            save(); mountFloating();
+        });
         floatingLabel.append(floatingText, checkbox);
         const open = text('div', '打开预设分组', 'menu_button'); open.tabIndex = 0; open.setAttribute('role', 'button');
         open.addEventListener('click', togglePanel);
