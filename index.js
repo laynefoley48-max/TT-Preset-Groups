@@ -1,10 +1,12 @@
 /**
- * 预设分组 / Preset Groups v0.2.1
+ * 预设分组 / Preset Groups v0.2.2
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
 const SLUG = 'tt_preset_groups_v1';
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+const CLASSIFICATION_ALGORITHM_VERSION = 2;
+const COLLAPSE_DEFAULTS_VERSION = 2;
 const $id = (id) => document.getElementById(id);
 const text = (tag, content, cls = '') => {
     const n = document.createElement(tag);
@@ -20,36 +22,82 @@ const htmlButton = (label, handler, cls = '') => {
 };
 const normalized = (name) => String(name || '').normalize('NFKC').toLowerCase()
     .replace(/[【】\[\]（）()\s·•_\-.—～~:：,，、\/\\]/g, '');
+
 function parseVersion(name) {
     const original = String(name || '').trim();
     const noCopy = original.replace(/\s*\(\d+\)\s*$/, '').trim();
-    // Accept both separated and attached suffixes, e.g. "Model-v1.2" and "万事成真v1.23".
+    // Only explicit version markers are removed from the canonical comparison base.
     const rx = /(?:v(?:er(?:sion)?)?\.?\s*|版本\s*)(\d+(?:\.\d+){0,3})(?:\s*[-_.]?\s*(?:alpha|beta|rc)\s*\d*)?\s*$/i;
     const match = noCopy.match(rx);
-    if (match && match.index > 0) return { base: noCopy.slice(0, match.index).trim().replace(/[\s_\-【\[（]+$/, ''), version: match[1], raw: original };
-    return { base: noCopy, version: null, raw: original };
+    if (match && match.index > 0) {
+        return {
+            base: noCopy.slice(0, match.index).trim().replace(/[\s_\-【\[（]+$/, ''),
+            version: match[1],
+            raw: original,
+            explicitVersion: true,
+        };
+    }
+    return { base: noCopy, version: null, raw: original, explicitVersion: false };
 }
-function longestCommonSpan(a, b) {
-    if (!a || !b) return 0;
-    let prev = new Uint16Array(b.length + 1), best = 0;
+
+// Unmarked trailing digits are ambiguous: keep the original and try one optional
+// suffix-free variant. Never strip digits from both names in the same comparison.
+function comparisonVariants(name) {
+    const parsed = parseVersion(name);
+    const variants = [{ base: parsed.base, strippedSuffix: false }];
+    if (!parsed.explicitVersion) {
+        const suffix = parsed.base.match(/(\d+(?:\.\d+)?)$/);
+        if (suffix && suffix.index >= 2) {
+            const shorter = parsed.base.slice(0, suffix.index).trim();
+            if (Array.from(shorter).length >= 2 && shorter !== parsed.base) {
+                variants.push({ base: shorter, strippedSuffix: true });
+            }
+        }
+    }
+    return variants;
+}
+
+function longestCommonSpanInfo(a, b) {
+    if (!a || !b) return { length: 0, text: '' };
+    let prev = new Uint16Array(b.length + 1), best = 0, end = 0;
     for (let i = 1; i <= a.length; i++) {
         const row = new Uint16Array(b.length + 1);
         for (let j = 1; j <= b.length; j++) {
             if (a[i - 1] === b[j - 1]) {
                 row[j] = prev[j - 1] + 1;
-                best = Math.max(best, row[j]);
+                if (row[j] > best) { best = row[j]; end = i; }
             }
         }
         prev = row;
     }
+    return { length: best, text: a.slice(end - best, end) };
+}
+function longestCommonSpan(a, b) {
+    return longestCommonSpanInfo(a, b).length;
+}
+function comparePresetNames(a, b) {
+    const variantsA = comparisonVariants(a), variantsB = comparisonVariants(b);
+    let best = { score: 0, common: '', usedAmbiguousSuffix: false, leftBase: '', rightBase: '', matchedLength: 0 };
+    for (const left of variantsA) for (const right of variantsB) {
+        if (left.strippedSuffix && right.strippedSuffix) continue;
+        const x = normalized(left.base), y = normalized(right.base);
+        if (!x || !y || x.length > 300 || y.length > 300) continue;
+        const common = longestCommonSpanInfo(x, y);
+        if (common.length < 2) continue;
+        const score = common.length / Math.max(x.length, y.length);
+        const usedAmbiguousSuffix = left.strippedSuffix || right.strippedSuffix;
+        if (score > best.score + 0.000001 ||
+            (Math.abs(score - best.score) <= 0.000001 && !usedAmbiguousSuffix && best.usedAmbiguousSuffix)) {
+            best = {
+                score, common: common.text, usedAmbiguousSuffix,
+                leftBase: x, rightBase: y, matchedLength: common.length,
+            };
+        }
+    }
     return best;
 }
 function similarity(a, b) {
-    const x = normalized(parseVersion(a).base), y = normalized(parseVersion(b).base);
-    if (!x || !y || x.length > 300 || y.length > 300) return 0;
-    const match = longestCommonSpan(x, y);
-    // For two-character titles, one common character is not enough.
-    return match < 2 ? 0 : match / Math.max(x.length, y.length);
+    return comparePresetNames(a, b).score;
 }
 function versionCompare(a, b) {
     const av = parseVersion(a).version, bv = parseVersion(b).version;
@@ -91,6 +139,9 @@ const defaults = () => ({
     knownPresets: [],
     knownPresetsInitialized: false,
     pendingMatches: [],
+    floatingSide: null,
+    collapseDefaultsVersion: 1,
+    classificationAlgorithmVersion: 1,
 });
 const ui = {
     ctx: null, data: null, pm: null, native: null, proxy: null, quick: null,
@@ -102,6 +153,10 @@ const ui = {
     drawerCheckbox: null,
     sortMode: false,
     quickPage: 0,
+    autoCollapseTimer: null,
+    floatingTuckTimer: null,
+    needsCollapseReset: false,
+    needsClassificationRebuild: false,
 };
 function notify(message, level = 'info') {
     if (window.toastr?.[level]) window.toastr[level](message);
@@ -123,11 +178,22 @@ function setTheme(theme) {
 function getData() {
     const bag = ui.ctx.extensionSettings;
     if (!bag[SLUG] || typeof bag[SLUG] !== 'object') bag[SLUG] = defaults();
+    const stored = bag[SLUG];
+    ui.needsCollapseReset = Number(stored.collapseDefaultsVersion || 0) < COLLAPSE_DEFAULTS_VERSION;
+    ui.needsClassificationRebuild = Number(stored.classificationAlgorithmVersion || 0) < CLASSIFICATION_ALGORITHM_VERSION;
     const def = defaults();
     for (const [key, val] of Object.entries(def)) {
-        if (bag[SLUG][key] === undefined) bag[SLUG][key] = val;
+        if (stored[key] === undefined) stored[key] = val;
     }
-    return bag[SLUG];
+    if (!stored.collapsed || typeof stored.collapsed !== 'object') stored.collapsed = {};
+    if (!stored.manualOverrides || typeof stored.manualOverrides !== 'object') stored.manualOverrides = {};
+    if (!stored.memberships || typeof stored.memberships !== 'object') stored.memberships = {};
+    if (!stored.presetOrder || typeof stored.presetOrder !== 'object') stored.presetOrder = {};
+    if (!Array.isArray(stored.pendingMatches)) stored.pendingMatches = [];
+    if (!Array.isArray(stored.groups)) stored.groups = [];
+    if (!Array.isArray(stored.favorites)) stored.favorites = [];
+    if (!Array.isArray(stored.selectedGroups)) stored.selectedGroups = [];
+    return stored;
 }
 function getManager() { return ui.ctx?.getPresetManager?.('openai') || null; }
 function getSelectElement() {
@@ -296,64 +362,88 @@ function addMembership(name, id, selected) {
     save(); refreshAll();
 }
 function commonSubstring(a, b) {
-    const x = normalized(parseVersion(a).base), y = normalized(parseVersion(b).base);
-    if (!x || !y) return '';
-    let prev = new Uint16Array(y.length + 1), best = 0, end = 0;
-    for (let i = 1; i <= x.length; i++) {
-        const row = new Uint16Array(y.length + 1);
-        for (let j = 1; j <= y.length; j++) if (x[i - 1] === y[j - 1]) {
-            row[j] = prev[j - 1] + 1;
-            if (row[j] > best) { best = row[j]; end = i; }
-        }
-        prev = row;
-    }
-    return x.slice(end - best, end);
+    return comparePresetNames(a, b).common;
 }
 function queueMatch(match) {
     const list = ui.data.pendingMatches || (ui.data.pendingMatches = []);
-    if (!list.some(item => item.name === match.name && item.groupId === match.groupId && item.otherName === match.otherName)) {
-        list.push({ id: makeId(), ...match });
+    const existing = list.find(item => item.name === match.name &&
+        item.groupId === (match.groupId || null) && item.otherName === (match.otherName || null));
+    if (existing) {
+        existing.score = match.score;
+        existing.common = match.common || '';
+        existing.usedAmbiguousSuffix = !!match.usedAmbiguousSuffix;
+        existing.leftBase = match.leftBase || '';
+        existing.rightBase = match.rightBase || '';
+        return;
     }
+    list.push({ id: makeId(), ...match });
 }
+
 function inferGroups() {
     const names = allNames();
     if (!names.length) return;
     let changed = false;
     const known = new Set(Object.keys(ui.data.memberships));
+    const autoGroups = ui.data.groups.filter(item => item.type === 'auto');
+
     for (const name of names) {
         if (known.has(name) || ui.data.manualOverrides[name]) continue;
-        const candidates = [];
-        for (const group of ui.data.groups.filter(item => item.type === 'auto')) {
-            const score = similarity(name, group.anchor || group.name);
-            if (score >= 0.5) candidates.push({ group, score });
-        }
-        candidates.sort((a, b) => b.score - a.score);
-        if (candidates.length) {
-            const best = candidates[0], clear = !candidates[1] || best.score - candidates[1].score > 0.08;
-            if (clear && best.score >= 0.85) ui.data.memberships[name] = [best.group.id];
-            else {
-                queueMatch({ name, groupId: best.group.id, otherName: best.group.anchor || best.group.name, score: best.score });
+
+        const groupCandidates = autoGroups.map(group => ({
+            group,
+            ...comparePresetNames(name, group.anchor || group.name),
+            otherName: group.anchor || group.name,
+        })).filter(item => item.score >= 0.4).sort((a, b) => b.score - a.score);
+
+        if (groupCandidates.length) {
+            const best = groupCandidates[0];
+            const clear = !groupCandidates[1] || best.score - groupCandidates[1].score > 0.08;
+            if (clear && best.score >= 0.8 && !best.usedAmbiguousSuffix) {
+                ui.data.memberships[name] = [best.group.id];
+            } else {
+                queueMatch({
+                    name, groupId: best.group.id, otherName: best.otherName,
+                    score: best.score, common: best.common,
+                    usedAmbiguousSuffix: best.usedAmbiguousSuffix,
+                    leftBase: best.leftBase, rightBase: best.rightBase,
+                });
                 ui.data.memberships[name] = [];
             }
             known.add(name); changed = true; continue;
         }
-        let best = null, bestScore = 0, tied = false;
+
+        const nameCandidates = [];
         for (const other of names) {
             if (other === name || !known.has(other) || ui.data.manualOverrides[other] || membersFor(other).length) continue;
-            const score = similarity(name, other);
-            if (score < 0.5) continue;
-            if (score > bestScore + 0.03) { best = other; bestScore = score; tied = false; }
-            else if (Math.abs(score - bestScore) <= 0.03) tied = true;
+            const comparison = comparePresetNames(name, other);
+            if (comparison.score >= 0.4) nameCandidates.push({ other, ...comparison });
         }
-        if (best && !tied && bestScore >= 0.85) {
-            const common = commonSubstring(name, best);
-            const group = { id: makeId(), name: common.length <= 2 ? common + '系列' : common, type: 'auto', anchor: best };
-            ui.data.groups.push(group);
-            ui.data.memberships[name] = [group.id]; ui.data.memberships[best] = [group.id];
-        } else if (best && bestScore >= 0.5) {
-            queueMatch({ name, otherName: best, score: bestScore });
+        nameCandidates.sort((a, b) => b.score - a.score);
+        if (nameCandidates.length) {
+            const best = nameCandidates[0];
+            const clear = !nameCandidates[1] || best.score - nameCandidates[1].score > 0.08;
+            if (clear && best.score >= 0.8 && !best.usedAmbiguousSuffix) {
+                const common = best.common || commonSubstring(name, best.other);
+                const group = {
+                    id: makeId(),
+                    name: common.length <= 2 ? common + '系列' : common,
+                    type: 'auto',
+                    anchor: best.other,
+                };
+                ui.data.groups.push(group);
+                ui.data.memberships[name] = [group.id];
+                ui.data.memberships[best.other] = [group.id];
+            } else {
+                queueMatch({
+                    name, otherName: best.other, score: best.score,
+                    common: best.common, usedAmbiguousSuffix: best.usedAmbiguousSuffix,
+                    leftBase: best.leftBase, rightBase: best.rightBase,
+                });
+                ui.data.memberships[name] = [];
+            }
+        } else {
             ui.data.memberships[name] = [];
-        } else ui.data.memberships[name] = [];
+        }
         known.add(name); changed = true;
     }
     if (changed) save();
@@ -361,14 +451,27 @@ function inferGroups() {
 function acceptPendingMatch(id) {
     const match = (ui.data.pendingMatches || []).find(item => item.id === id);
     if (!match) return;
+    const common = match.common || commonSubstring(match.name, match.otherName || '');
     if (match.groupId && ui.data.groups.some(group => group.id === match.groupId)) {
+        const group = ui.data.groups.find(item => item.id === match.groupId);
+        group.confirmed = true;
         const ids = new Set(membersFor(match.name)); ids.add(match.groupId);
         ui.data.memberships[match.name] = [...ids];
+        ui.data.manualOverrides[match.name] = true;
+        if (match.otherName) ui.data.manualOverrides[match.otherName] = true;
     } else if (match.otherName) {
-        const common = commonSubstring(match.name, match.otherName);
-        const group = { id: makeId(), name: common.length <= 2 ? common + '系列' : common, type: 'auto', anchor: match.otherName, confirmed: true };
+        const group = {
+            id: makeId(),
+            name: common.length <= 2 ? common + '系列' : common,
+            type: 'auto',
+            anchor: match.otherName,
+            confirmed: true,
+        };
         ui.data.groups.push(group);
-        ui.data.memberships[match.name] = [group.id]; ui.data.memberships[match.otherName] = [group.id];
+        ui.data.memberships[match.name] = [group.id];
+        ui.data.memberships[match.otherName] = [group.id];
+        ui.data.manualOverrides[match.name] = true;
+        ui.data.manualOverrides[match.otherName] = true;
     }
     ui.data.pendingMatches = ui.data.pendingMatches.filter(item => item.id !== id);
     save(); refreshAll();
@@ -380,6 +483,47 @@ function ignorePendingMatch(id) {
     if (!Object.prototype.hasOwnProperty.call(ui.data.memberships, match.name)) ui.data.memberships[match.name] = [];
     ui.data.pendingMatches = ui.data.pendingMatches.filter(item => item.id !== id);
     save(); refreshAll();
+}
+function reclassifyAutomaticGroups(silent = false) {
+    const oldAutoIds = new Set(ui.data.groups
+        .filter(group => group.type === 'auto' && !group.confirmed)
+        .map(group => group.id));
+
+    // Keep group records as anchors so their IDs, names, order, collapsed state
+    // and per-group sorting survive. Only automatic memberships are recalculated.
+    for (const [name, memberships] of Object.entries(ui.data.memberships)) {
+        if (ui.data.manualOverrides[name]) continue;
+        const kept = (Array.isArray(memberships) ? memberships : []).filter(id => !oldAutoIds.has(id));
+        if (kept.length) ui.data.memberships[name] = kept;
+        else delete ui.data.memberships[name];
+    }
+
+    ui.data.pendingMatches = [];
+    ui.data.classificationAlgorithmVersion = CLASSIFICATION_ALGORITHM_VERSION;
+    ui.needsClassificationRebuild = false;
+    inferGroups();
+
+    const manuallyProtected = new Set();
+    for (const [name, memberships] of Object.entries(ui.data.memberships)) {
+        if (!ui.data.manualOverrides[name]) continue;
+        for (const id of memberships) if (oldAutoIds.has(id)) manuallyProtected.add(id);
+    }
+    const emptyAutoIds = new Set(ui.data.groups
+        .filter(group => group.type === 'auto' && !group.confirmed && !manuallyProtected.has(group.id))
+        .filter(group => !Object.values(ui.data.memberships).some(ids => Array.isArray(ids) && ids.includes(group.id)))
+        .map(group => group.id));
+    if (emptyAutoIds.size) {
+        ui.data.groups = ui.data.groups.filter(group => !emptyAutoIds.has(group.id));
+        ui.data.groupOrder = (ui.data.groupOrder || []).filter(id => !emptyAutoIds.has(id));
+        for (const id of emptyAutoIds) {
+            delete ui.data.collapsed[id];
+            delete ui.data.presetOrder[id];
+        }
+    }
+    syncGroupOrder();
+    save();
+    if (!silent) notify('已重新识别自动分类；手动分组、手动归属、收藏和排序已保留。', 'success');
+    if (ui.panelOpen) renderPanelContent();
 }
 function syncImportedPresets(initial = false) {
     const names = allNames();
@@ -577,6 +721,27 @@ function renderQuick() {
     if (!groups.length) grid.append(text('p', '暂无分组，请在独立面板创建。', 'pg-muted'));
     ui.quick.append(grid);
 
+    // Pagination belongs to the group grid, not to the filtered preset results.
+    if (pageCount > 1) {
+        const row = text('div', '', 'pg-quick-pagination-row');
+        row.append(text('small', '分组', 'pg-pagination-label'));
+        const pagination = text('div', '', 'pg-quick-pagination');
+        const previous = htmlButton('‹', () => {
+            ui.quickPage = Math.max(0, ui.quickPage - 1); renderQuick();
+        }, 'pg-page-button');
+        previous.disabled = ui.quickPage === 0;
+        previous.title = '上一页'; previous.setAttribute('aria-label', '上一页');
+        const indicator = text('span', `${ui.quickPage + 1} / ${pageCount}`, 'pg-page-indicator');
+        indicator.setAttribute('aria-live', 'polite');
+        const next = htmlButton('›', () => {
+            ui.quickPage = Math.min(pageCount - 1, ui.quickPage + 1); renderQuick();
+        }, 'pg-page-button');
+        next.disabled = ui.quickPage >= pageCount - 1;
+        next.title = '下一页'; next.setAttribute('aria-label', '下一页');
+        pagination.append(previous, indicator, next);
+        row.append(pagination); ui.quick.append(row);
+    }
+
     if (ui.data.selectedGroups.length) {
         const results = text('div', '', 'pg-filter-results');
         const names = allNames().filter(matchesFilter).sort(versionCompare);
@@ -596,23 +761,6 @@ function renderQuick() {
 
     const footer = text('div', '', 'pg-quick-footer');
     footer.append(text('small', '多选取并集 · 同一预设不重复'));
-    if (pageCount > 1) {
-        const pagination = text('div', '', 'pg-quick-pagination');
-        const previous = htmlButton('‹', () => {
-            ui.quickPage = Math.max(0, ui.quickPage - 1); renderQuick();
-        }, 'pg-page-button');
-        previous.disabled = ui.quickPage === 0;
-        previous.title = '上一页'; previous.setAttribute('aria-label', '上一页');
-        const indicator = text('span', `${ui.quickPage + 1} / ${pageCount}`, 'pg-page-indicator');
-        indicator.setAttribute('aria-live', 'polite');
-        const next = htmlButton('›', () => {
-            ui.quickPage = Math.min(pageCount - 1, ui.quickPage + 1); renderQuick();
-        }, 'pg-page-button');
-        next.disabled = ui.quickPage >= pageCount - 1;
-        next.title = '下一页'; next.setAttribute('aria-label', '下一页');
-        pagination.append(previous, indicator, next);
-        footer.append(pagination);
-    }
     if (ui.data.selectedGroups.length) footer.append(htmlButton('清除筛选', () => {
         ui.data.selectedGroups = []; save(); refreshAll();
     }, 'pg-text-btn'));
@@ -637,18 +785,26 @@ function mountNative() {
 }
 function openPanel() {
     if (!ui.panel) createPanel();
+    clearTimeout(ui.floatingTuckTimer); ui.floatingTuckTimer = null;
+    untuckFloating();
     ui.panel.hidden = false; ui.panelOpen = true;
     applyTheme(); document.body.classList.add('pg-panel-visible'); renderPanel();
 }
 function closePanel() {
+    stopAutoCollapseTimer();
     if (ui.panel) ui.panel.hidden = true;
     ui.panelOpen = false; document.body.classList.remove('pg-panel-visible');
+    scheduleFloatingTuck();
 }
 function togglePanel() { ui.panelOpen ? closePanel() : openPanel(); }
 function createPanel() {
     const scrim = text('div', '', 'pg-panel-scrim');
     scrim.id = 'pg-panel'; scrim.hidden = true; scrim.dataset.pgTheme = ui.data.theme || 'follow';
     scrim.addEventListener('click', e => { if (e.target === scrim) closePanel(); });
+    const activity = () => resetAutoCollapseTimer();
+    for (const eventName of ['pointerdown', 'click', 'keydown', 'input', 'scroll', 'wheel', 'touchstart']) {
+        scrim.addEventListener(eventName, activity, { capture: true, passive: ['scroll', 'wheel', 'touchstart'].includes(eventName) });
+    }
     const windowBox = text('section', '', 'pg-window');
     windowBox.setAttribute('role', 'dialog'); windowBox.setAttribute('aria-label', '预设分组管理');
     scrim.append(windowBox); document.body.append(scrim); ui.panel = scrim;
@@ -734,6 +890,7 @@ function groupCard(group, list, headingRight = '') {
         head.setAttribute('aria-expanded', String(!collapsed));
         if (collapsed) section.querySelector(':scope > .pg-series-body')?.remove();
         else section.append(makeBody());
+        resetAutoCollapseTimer();
     }, 'pg-series-heading');
     head.setAttribute('aria-expanded', String(!collapsed));
     head.append(text('span', `${collapsed ? '▸' : '▾'} ${group.name}`));
@@ -748,7 +905,7 @@ function renameGroup(group) {
     const cleaned = newName.trim();
     if (!cleaned || ui.data.groups.some(g=>g.id!==group.id && g.name===cleaned))
         return notify('名称不能为空或与现有分组重复', 'warning');
-    group.name=cleaned; save(); refreshAll();
+    group.name=cleaned; group.userRenamed = true; group.confirmed = group.type === 'auto' ? true : group.confirmed; save(); refreshAll();
 }
 function deleteGroup(group) {
     if (!window.confirm(`只删除分组「${group.name}」？其中的预设不会被删除。`)) return;
@@ -864,39 +1021,92 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.1')); win.append(foot);
+    foot.append(label, text('small', '仅管理 Chat Completion 预设 · v0.2.2')); win.append(foot);
     renderPanelContent();
     const rebuilt = $id('pg-panel-content'); if (rebuilt) rebuilt.scrollTop = previousTop;
     applyTheme();
+}
+function currentAllGroupIds() {
+    const ids = [];
+    const grouped = new Set();
+    for (const group of sortGroups()) {
+        const members = allNames().filter(name => membersFor(name).includes(group.id));
+        if (!members.length) continue;
+        ids.push(group.id);
+        for (const name of members) grouped.add(name);
+    }
+    if (allNames().some(name => !grouped.has(name))) ids.push('__independent__');
+    return ids;
+}
+function stopAutoCollapseTimer() {
+    if (ui.autoCollapseTimer) clearTimeout(ui.autoCollapseTimer);
+    ui.autoCollapseTimer = null;
+}
+function resetAutoCollapseTimer() {
+    stopAutoCollapseTimer();
+    if (!ui.panelOpen || ui.tab !== 'all') return;
+    const hasExpanded = currentAllGroupIds().some(id => ui.data.collapsed[id] === false);
+    if (!hasExpanded) return;
+    ui.autoCollapseTimer = setTimeout(() => {
+        ui.autoCollapseTimer = null;
+        if (!ui.panelOpen || ui.tab !== 'all') return;
+        for (const id of currentAllGroupIds()) ui.data.collapsed[id] = true;
+        save();
+        renderPanelContent();
+    }, 30000);
+}
+function setAllGroupsExpanded(expanded) {
+    for (const id of currentAllGroupIds()) ui.data.collapsed[id] = !expanded;
+    save();
+    renderPanelContent();
+    resetAutoCollapseTimer();
+}
+function applyCollapsedDefaults() {
+    for (const group of ui.data.groups) ui.data.collapsed[group.id] = true;
+    ui.data.collapsed.__independent__ = true;
+    ui.data.collapsed.__uncategorized__ = true;
+    ui.data.collapseDefaultsVersion = COLLAPSE_DEFAULTS_VERSION;
+    ui.needsCollapseReset = false;
+    save();
 }
 function renderPanelContent() {
     const content = $id('pg-panel-content');
     if (!content) return;
     const oldTop = content.scrollTop; content.replaceChildren();
     if (!ui.native) {
+        stopAutoCollapseTimer();
         content.append(text('p', '当前页面还未找到 Chat Completion 预设选择器。请打开 API 连接设置并选择 Chat Completion。', 'pg-muted'));
         return;
     }
     const names = allNames().filter(name => normalized(name).includes(normalized(ui.query)));
     const all = allNames();
     content.append(text('p', `共 ${all.length} 个预设 · ${ui.data.groups.length} 个分组 · 当前：${ui.activeName || '无'}`, 'pg-summary'));
-    if (ui.tab !== 'fav') {
+
+    if (ui.tab === 'all') {
         const toolbar = text('div', '', 'pg-content-toolbar');
         toolbar.append(htmlButton(ui.sortMode ? '完成' : '↕', () => {
             ui.sortMode = !ui.sortMode; renderPanelContent();
         }, `pg-sort-toggle${ui.sortMode ? ' is-active' : ''}`));
-        toolbar.append(text('small', ui.sortMode ? '排序模式：长按左侧把手约 2 秒后拖动' : '调整分组及分组内预设顺序', 'pg-sort-hint'));
-        if (ui.sortMode) toolbar.append(htmlButton('恢复默认排序', () => {
+        toolbar.append(text('small', ui.sortMode ? '长按左侧把手约2秒，拖动调整' : '点击按钮调整顺序', 'pg-sort-hint'));
+        const actions = text('div', '', 'pg-toolbar-actions');
+        actions.append(htmlButton('全部展开', () => setAllGroupsExpanded(true), 'pg-toolbar-small-btn'));
+        actions.append(htmlButton('全部收起', () => setAllGroupsExpanded(false), 'pg-toolbar-small-btn'));
+        if (ui.sortMode) actions.append(htmlButton('恢复默认排序', () => {
             ui.data.groupOrder = []; ui.data.presetOrder = {}; ui.sortMode = false; save(); refreshAll();
-        }, 'pg-reset-sort'));
+        }, 'pg-toolbar-small-btn pg-reset-sort'));
+        toolbar.append(actions);
         content.append(toolbar);
     }
+
     if (ui.tab === 'fav') {
         const favorites = names.filter(name => ui.data.favorites.includes(name)).sort(collator.compare);
         if (!favorites.length) content.append(text('p', '没有符合条件的收藏预设。', 'pg-empty'));
         for (const name of favorites) content.append(makePresetRow(name));
     } else if (ui.tab === 'groups') {
-        content.append(text('p', '在这里创建自己的分组，或把预设加入已有分组。自动识别不确定的匹配会放在「待确认」中。', 'pg-category-help'));
+        const intro = text('div', '', 'pg-category-toolbar');
+        intro.append(text('p', '在这里创建自己的分组，或把预设加入已有分组。自动识别不确定的匹配会放在「待确认」中。', 'pg-category-help'));
+        intro.append(htmlButton('重新识别自动分类', () => reclassifyAutomaticGroups(false), 'pg-reclassify-btn'));
+        content.append(intro);
         const controls = text('div', '', 'pg-inline');
         const input = document.createElement('input'); input.placeholder = '输入分组名称'; input.maxLength = 60;
         const create = () => {
@@ -908,15 +1118,18 @@ function renderPanelContent() {
         };
         input.addEventListener('keydown', event => { if (event.key === 'Enter') create(); });
         controls.append(input, htmlButton('＋ 新建分组', create, 'pg-primary')); content.append(controls);
+
         const pending = ui.data.pendingMatches || [];
         if (pending.length) {
             content.append(text('div', `待确认匹配 · ${pending.length}`, 'pg-category-section'));
-            content.append(text('p', '名称相似度达到 50%，但不够确定；确认后才会合并。', 'pg-category-note'));
+            content.append(text('p', '相似度达到40%且至少有两个连续相同字符时列入候选；达到80%且候选唯一时才自动归组。未标记的末尾数字会额外尝试剥离，因此这类匹配需要人工确认。', 'pg-category-note'));
             for (const match of pending) {
                 const card = text('div', '', 'pg-pending-match');
-                const other = match.groupId ? (ui.data.groups.find(group => group.id === match.groupId)?.name || match.otherName) : match.otherName;
+                const other = match.groupId ? (ui.data.groups.find(group => group.id === match.groupId)?.anchor || match.otherName) : match.otherName;
                 card.append(text('div', `${match.name}  ↔  ${other}`, 'pg-pending-title'));
-                card.append(text('small', `名称相似度 ${Math.round(match.score * 100)}%`, 'pg-pending-score'));
+                const evidence = match.common ? `连续相同「${match.common}」 · ` : '';
+                const suffixNote = match.usedAmbiguousSuffix ? ' · 比较时尝试忽略末尾数字' : '';
+                card.append(text('small', `${evidence}名称相似度 ${Math.round(match.score * 100)}%${suffixNote}`, 'pg-pending-score'));
                 const actions = text('div', '', 'pg-pending-actions');
                 actions.append(htmlButton('合并为同系列', () => acceptPendingMatch(match.id), 'pg-primary'));
                 actions.append(htmlButton('不是同系列', () => ignorePendingMatch(match.id), 'pg-text-btn'));
@@ -925,7 +1138,7 @@ function renderPanelContent() {
         }
         for (const [type, title, description] of [
             ['manual','我的分组','自己创建，可添加任意预设'],
-            ['auto','自动识别的系列','高可信度自动归组；相似度 50%–84% 的结果等待确认']
+            ['auto','自动识别的系列','80%以上且候选唯一时自动归组；40%–79%进入待确认']
         ]) {
             const groups = sortGroups().filter(group => group.type === type);
             content.append(text('div', `${title} · ${groups.length}`, 'pg-category-section'));
@@ -958,50 +1171,98 @@ function renderPanelContent() {
         if (!names.length) content.append(text('p', '没有匹配的预设。', 'pg-empty'));
     }
     content.scrollTop = oldTop;
+    if (ui.tab === 'all') resetAutoCollapseTimer();
+    else stopAutoCollapseTimer();
+}
+function clearFloatingTuckTimer() {
+    if (ui.floatingTuckTimer) clearTimeout(ui.floatingTuckTimer);
+    ui.floatingTuckTimer = null;
+}
+function untuckFloating() {
+    clearFloatingTuckTimer();
+    ui.floating?.classList.remove('pg-floating-tucked-left', 'pg-floating-tucked-right');
+}
+function tuckFloating() {
+    if (!ui.floating || !ui.data.floatingSide) return;
+    ui.floating.classList.remove('pg-floating-tucked-left', 'pg-floating-tucked-right');
+    ui.floating.classList.add(ui.data.floatingSide === 'left' ? 'pg-floating-tucked-left' : 'pg-floating-tucked-right');
+}
+function scheduleFloatingTuck() {
+    clearFloatingTuckTimer();
+    if (!ui.floating || !ui.data.floatingSide) return;
+    ui.floatingTuckTimer = setTimeout(() => {
+        ui.floatingTuckTimer = null;
+        if (!ui.panelOpen) tuckFloating();
+    }, 1000);
 }
 function mountFloating() {
-    if (!ui.data?.floatingEnabled) { ui.floating?.remove(); ui.floating = null; return; }
+    if (!ui.data?.floatingEnabled) {
+        clearFloatingTuckTimer(); ui.floating?.remove(); ui.floating = null; return;
+    }
     if (ui.floating?.isConnected) { applyTheme(); return; }
     const ball = htmlButton('预', () => {}, 'pg-floating-button');
     ball.id = 'pg-floating'; ball.title = '打开预设分组'; ball.setAttribute('aria-label', '打开预设分组');
     let pointer = null, startX = 0, startY = 0, originLeft = 0, originTop = 0, moved = false;
+
     ball.addEventListener('click', event => {
-        if (ball.dataset.suppressClick === '1') { delete ball.dataset.suppressClick; event.preventDefault(); event.stopPropagation(); return; }
+        if (ball.dataset.suppressClick === '1') {
+            delete ball.dataset.suppressClick; event.preventDefault(); event.stopPropagation(); return;
+        }
         togglePanel();
     });
     ball.addEventListener('pointerdown', event => {
         if (event.button !== 0 || pointer !== null) return;
         pointer = event.pointerId; moved = false;
         const rect = ball.getBoundingClientRect();
-        startX = event.clientX; startY = event.clientY; originLeft = rect.left; originTop = rect.top;
+        const savedLeft = Number.isFinite(ui.data.floatingPosition?.left) ? ui.data.floatingPosition.left : rect.left;
+        const savedTop = Number.isFinite(ui.data.floatingPosition?.top) ? ui.data.floatingPosition.top : rect.top;
+        ball.classList.remove('pg-floating-tucked-left', 'pg-floating-tucked-right');
+        originLeft = savedLeft; originTop = savedTop;
+        ball.style.left = `${originLeft}px`; ball.style.top = `${originTop}px`;
+        ball.style.right = 'auto'; ball.style.bottom = 'auto';
+        startX = event.clientX; startY = event.clientY;
         try { ball.setPointerCapture(pointer); } catch {}
     });
     ball.addEventListener('pointermove', event => {
         if (event.pointerId !== pointer) return;
         if (!moved && Math.hypot(event.clientX - startX, event.clientY - startY) < 7) return;
-        moved = true; ball.classList.add('pg-floating-dragging');
-        const left = Math.max(4, Math.min(window.innerWidth - ball.offsetWidth - 4, originLeft + event.clientX - startX));
+        moved = true; ball.classList.remove('pg-floating-tucked-left', 'pg-floating-tucked-right');
+        ball.classList.add('pg-floating-dragging');
+        const left = Math.max(0, Math.min(window.innerWidth - ball.offsetWidth, originLeft + event.clientX - startX));
         const top = Math.max(4, Math.min(window.innerHeight - ball.offsetHeight - 4, originTop + event.clientY - startY));
-        ball.style.left = `${left}px`; ball.style.top = `${top}px`; ball.style.right = 'auto'; ball.style.bottom = 'auto';
+        ball.style.left = `${left}px`; ball.style.top = `${top}px`;
         event.preventDefault();
     });
-    const finish = event => {
+    const finish = (event, cancelled = false) => {
         if (pointer === null || (event?.pointerId !== undefined && event.pointerId !== pointer)) return;
         const wasMoved = moved; pointer = null; ball.classList.remove('pg-floating-dragging');
         if (wasMoved) {
             const rect = ball.getBoundingClientRect();
-            ui.data.floatingPosition = { left: rect.left, top: rect.top };
+            let left = rect.left, side = null;
+            const edgeThreshold = 48;
+            if (!cancelled && rect.left <= edgeThreshold) { side = 'left'; left = 4; }
+            else if (!cancelled && window.innerWidth - rect.right <= edgeThreshold) {
+                side = 'right'; left = window.innerWidth - ball.offsetWidth - 4;
+            }
+            ball.style.left = `${left}px`; ball.style.top = `${rect.top}px`;
+            ui.data.floatingPosition = { left, top: rect.top };
+            ui.data.floatingSide = side;
+            if (side) tuckFloating();
+            else ball.classList.remove('pg-floating-tucked-left', 'pg-floating-tucked-right');
             ball.dataset.suppressClick = '1'; save();
         }
         moved = false;
     };
-    ball.addEventListener('pointerup', finish); ball.addEventListener('pointercancel', finish); ball.addEventListener('lostpointercapture', finish);
+    ball.addEventListener('pointerup', event => finish(event, false));
+    ball.addEventListener('pointercancel', event => finish(event, true));
+    ball.addEventListener('lostpointercapture', event => finish(event, true));
     document.body.append(ball); ui.floating = ball;
     const position = ui.data.floatingPosition;
     if (position && Number.isFinite(position.left) && Number.isFinite(position.top)) {
-        const left = Math.max(4, Math.min(window.innerWidth - 46, position.left));
-        const top = Math.max(4, Math.min(window.innerHeight - 46, position.top));
+        const left = Math.max(0, Math.min(window.innerWidth - ball.offsetWidth, position.left));
+        const top = Math.max(4, Math.min(window.innerHeight - ball.offsetHeight - 4, position.top));
         ball.style.left = `${left}px`; ball.style.top = `${top}px`; ball.style.right = 'auto'; ball.style.bottom = 'auto';
+        if (ui.data.floatingSide === 'left' || ui.data.floatingSide === 'right') tuckFloating();
     }
     applyTheme();
 }
@@ -1061,19 +1322,24 @@ async function init() {
         console.warn('[预设分组] 预设快照接口不可用，切换时将进行安全提示', err);
     }
     mountMenu(); mountNative(); createPanel();
-    inferGroups(); syncImportedPresets(true); mountFloating(); applyTheme();
+    if (ui.native) {
+        if (ui.needsClassificationRebuild) reclassifyAutomaticGroups(true);
+        else inferGroups();
+    }
+    syncImportedPresets(true);
+    if (ui.needsCollapseReset) applyCollapsedDefaults();
+    mountFloating(); applyTheme();
     const { eventSource, event_types } = ui.ctx;
     if (eventSource && event_types) {
         if (event_types.PRESET_CHANGED) eventSource.on(event_types.PRESET_CHANGED, onPresetChanged);
         if (event_types.MAIN_API_CHANGED) eventSource.on(event_types.MAIN_API_CHANGED, queueRefresh);
         if (event_types.PRESET_DELETED) eventSource.on(event_types.PRESET_DELETED, queueRefresh);
     }
-    // Lightweight fallback for delayed TT panels, theme-driven DOM replacement,
-    // newly imported presets, and API changes that do not emit a standardized event.
     setInterval(() => {
         mountMenu();
         if (!ui.native?.isConnected) mountNative();
         if (ui.native) {
+            if (ui.needsClassificationRebuild) reclassifyAutomaticGroups(true);
             const names = allNames();
             const missing = names.some(n => !Object.prototype.hasOwnProperty.call(ui.data.memberships, n));
             if (missing) inferGroups();
@@ -1081,12 +1347,11 @@ async function init() {
             if (missing || imported) refreshAll();
             const value = String(ui.native.value);
             if (value !== ui.activeValue && !ui.busy && !ui.confirmOpen) {
-                // Changes from external plugins may bypass the native capture handler.
                 syncActive(); refreshAll();
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.1 已加载');
+    console.info('[预设分组] v0.2.2 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
