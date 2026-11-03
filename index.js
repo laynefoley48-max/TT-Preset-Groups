@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.16
+ * 预设分组 / Preset Groups v0.2.17
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -962,6 +962,13 @@ function syncOverlayAppearance(node) {
     }
 }
 function appendOverlay(node) {
+    // TT/ST automatically close unpinned native drawers on html touchstart or
+    // mousedown outside .openDrawer. Our panels are intentionally portaled to
+    // documentElement, so their interactions must not bubble to that handler.
+    // Do not preventDefault: scrolling, dragging, focus and button clicks work.
+    for (const type of ['touchstart', 'mousedown', 'pointerdown']) {
+        node.addEventListener(type, event => event.stopPropagation());
+    }
     syncOverlayAppearance(node);
     document.documentElement.append(node);
     syncViewportOverlays();
@@ -1715,7 +1722,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    const version = text('small', 'v0.2.16', 'pg-footer-version');
+    const version = text('small', 'v0.2.17', 'pg-footer-version');
     foot.append(label, version); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
@@ -2216,7 +2223,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.16 已加载');
+    console.info('[预设分组] v0.2.17 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
