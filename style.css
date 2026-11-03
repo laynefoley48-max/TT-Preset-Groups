@@ -643,3 +643,59 @@
   font: inherit;
   font-size: 13px;
 }
+
+/* v0.2.16: small quick actions alongside pagination, no extra row. */
+#pg-quick .pg-quick-actions {
+  display:inline-flex; align-items:center; flex:0 1 auto; min-width:0; gap:10px;
+}
+#pg-quick .pg-quick-open-panel {
+  display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto;
+  padding:3px 7px; min-height:23px; min-width:0; border:1px solid var(--pg-border);
+  border-radius:4px; background:transparent; color:var(--pg-muted);
+  font-size:10px; line-height:1.25; white-space:nowrap;
+}
+#pg-quick .pg-quick-open-panel:active { color:var(--pg-text); border-color:var(--pg-accent); }
+
+/* Make the preset name and the two icon buttons independent tap targets. */
+#pg-quick .pg-filter-entry {
+  display:flex; align-items:center; gap:2px; min-height:37px; min-width:0;
+  border:1px solid var(--pg-border); border-radius:5px;
+  background:var(--pg-surface-2); color:var(--pg-text);
+}
+#pg-quick .pg-filter-entry.is-current { border-color:var(--pg-accent); }
+#pg-quick .pg-filter-entry .pg-filter-preset {
+  flex:1 1 0; width:auto; min-width:0;
+  border:0; border-radius:0; background:transparent; padding:8px 5px 8px 9px;
+  font-size:12px; line-height:1.45; text-align:left; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis;
+}
+#pg-quick .pg-filter-entry .pg-filter-preset.is-current { border:0; font-weight:600; }
+#pg-quick .pg-filter-actions {
+  display:inline-flex; align-items:center; justify-content:flex-end;
+  flex:0 0 auto; gap:1px; padding-right:3px;
+}
+#pg-quick .pg-filter-icon {
+  display:inline-flex; align-items:center; justify-content:center;
+  flex:0 0 26px; width:26px; min-width:26px; height:28px; min-height:28px;
+  margin:0; padding:0; border:0; border-radius:4px;
+  background:transparent; color:var(--pg-muted); line-height:1;
+}
+#pg-quick .pg-filter-icon i { font-size:12px; line-height:1; pointer-events:none; }
+#pg-quick .pg-filter-icon:active { color:var(--pg-accent); background:var(--pg-surface-3); }
+#pg-quick .pg-filter-icon:disabled { opacity:.3; cursor:default; }
+#pg-quick .pg-filter-entry .pg-new-badge {
+  flex:0 0 auto; font-size:9px; padding:2px 3px; border-radius:3px;
+  color:var(--pg-accent); background:var(--pg-surface-3);
+}
+@media (max-width:480px) {
+  #pg-quick .pg-quick-actions { gap:7px; }
+  #pg-quick .pg-quick-open-panel { padding:3px 6px; font-size:10px; }
+  #pg-quick .pg-filter-icon { flex-basis:25px; width:25px; min-width:25px; }
+}
+
+/* The existing drag logic is unchanged; move both handles to the right edge. */
+#pg-panel .pg-series-top > .pg-drag-handle,
+#pg-panel .pg-preset-row > .pg-drag-handle {
+  flex:0 0 24px; width:24px; min-width:24px; min-height:29px;
+  margin:0 3px 0 0; padding:3px 0;
+}
