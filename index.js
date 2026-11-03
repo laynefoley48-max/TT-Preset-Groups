@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.17
+ * 预设分组 / Preset Groups v0.2.18
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -1284,65 +1284,114 @@ function replacePresetReferencesInSettings(oldName, newName) {
     ui.data.knownPresetsInitialized = true;
     if (ui.activeName === oldName) ui.activeName = newName;
 }
+function clonePresetSnapshot(value) {
+    // Clone all fields, not just the prompt definitions. Other extensions keep
+    // per-preset data (e.g. BaiBai's prompt groups) inside preset.extensions.
+    return typeof structuredClone === 'function'
+        ? structuredClone(value)
+        : JSON.parse(JSON.stringify(value));
+}
+function samePresetSnapshot(a, b) {
+    return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+}
 async function renamePresetWithoutSwitching(oldName, newName) {
     const manager = ui.pm || getManager();
     if (!manager) throw new Error('没有找到 Chat Completion 预设管理器');
     const oldValue = getValueByName(oldName);
     if (oldValue === undefined) throw new Error('找不到这个预设，可能已经被删除或改名');
     if (String(oldValue) === 'gui') throw new Error('内置 GUI 预设不能重命名');
+    if (oldName === newName) return;
+    if (getValueByName(newName) !== undefined) throw new Error('新名称已存在，请换一个名称');
+    if (/[\\/:*?"<>|\x00-\x1F]/.test(newName) || /[. ]$/.test(newName)) {
+        throw new Error('新名称含有文件名不支持的字符，请修改后再试');
+    }
+    if (ui.busy) throw new Error('正在切换或重命名预设，请完成当前操作后重试');
 
     const activeName = manager.getSelectedPresetName();
-    if (activeName === oldName) {
-        if (typeof manager.renamePreset !== 'function') {
-            throw new Error('当前 TT 版本没有提供安全的当前预设重命名接口');
-        }
-        // Native rename triggers a change event while updating its selector.
-        // Suppress our unsaved-change interception only for that native transaction.
-        if (ui.busy) throw new Error('正在切换预设，请完成当前操作后重试');
-        ui.busy = true;
-        try {
+    ui.busy = true;
+    try {
+        if (activeName === oldName) {
+            if (typeof manager.renamePreset !== 'function') {
+                throw new Error('当前 TT 版本没有提供安全的当前预设重命名接口');
+            }
+            // Keep the existing current-preset rename route unchanged.
             await manager.renamePreset(newName);
-        } catch (error) {
-            syncActive(); refreshAll();
-            throw error;
-        } finally {
-            ui.busy = false;
-        }
-    } else {
-        const storedPreset = getStoredPreset(oldName);
-        if (!storedPreset) throw new Error('无法读取该预设的原始配置，已取消重命名');
-        const preset = typeof structuredClone === 'function'
-            ? structuredClone(storedPreset) : JSON.parse(JSON.stringify(storedPreset));
-        const { preset_names } = manager.getPresetList('openai');
-        const oldIndex = preset_names[oldName];
+        } else {
+            // The native rename UI explicitly copies the FULL extensions object.
+            // savePreset(skipUpdate) by itself is not a compatible rename: it
+            // bypasses BaiBai's PRESET_RENAMED_BEFORE/PRESET_RENAMED lifecycle.
+            // We cannot safely fire those native events for an inactive preset,
+            // because they refer to the currently loaded prompt manager state.
+            // Instead copy all saved fields and verify them before deleting.
+            if (typeof manager.readPresetExtensionField !== 'function' ||
+                typeof manager.writePresetExtensionField !== 'function') {
+                throw new Error('当前 TT 未提供完整扩展数据迁移接口；为保护百宝箱分组，已取消改名');
+            }
+            const storedPreset = getStoredPreset(oldName);
+            if (!storedPreset || typeof storedPreset !== 'object') {
+                throw new Error('无法读取原预设的完整配置，已取消重命名');
+            }
+            const original = clonePresetSnapshot(storedPreset);
+            const originalExtensions = manager.readPresetExtensionField({ name: oldName, path: '' });
+            if (originalExtensions === null || typeof originalExtensions !== 'object' ||
+                Array.isArray(originalExtensions)) {
+                throw new Error('无法读取原预设的扩展数据，已取消重命名');
+            }
+            if (original.extensions && !samePresetSnapshot(original.extensions, originalExtensions)) {
+                throw new Error('预设扩展数据存在尚未同步的变更，已取消重命名以避免丢失分组');
+            }
+            const extensions = clonePresetSnapshot(originalExtensions);
+            original.extensions = clonePresetSnapshot(extensions);
+            const oldIndex = manager.getPresetList('openai').preset_names[oldName];
 
-        await manager.savePreset(newName, preset, { skipUpdate: true });
-        try {
-            await retargetPresetReferences(oldName, newName);
-        } catch (error) {
-            ensurePresetOptionWithoutSelecting(newName, preset);
-            throw new Error('新名称已保存，但 TT 的关联引用更新失败；原预设仍保留，请检查后再处理。');
+            // Safe order: save a new copy -> expose it to the manager ->
+            // explicitly persist extensions -> verify -> retarget -> delete old.
+            // On *any* pre-delete failure, leave the original preset in place.
+            await manager.savePreset(newName, original, { skipUpdate: true });
+            ensurePresetOptionWithoutSelecting(newName, original);
+            try {
+                await manager.writePresetExtensionField({
+                    name: newName, path: '', value: clonePresetSnapshot(extensions),
+                });
+                const newPreset = getStoredPreset(newName);
+                const migratedExtensions = manager.readPresetExtensionField({ name: newName, path: '' });
+                if (!newPreset ||
+                    !samePresetSnapshot(newPreset, original) ||
+                    !samePresetSnapshot(migratedExtensions, extensions)) {
+                    throw new Error('新预设的数据校验不一致');
+                }
+                if (manager.getSelectedPresetName() !== activeName) {
+                    throw new Error('改名期间当前预设发生变化');
+                }
+                await retargetPresetReferences(oldName, newName);
+            } catch (error) {
+                // A duplicate new file may remain, but the old one is untouched.
+                throw new Error(`已保留原预设「${oldName}」。新名称可能存在副本，但扩展数据未确认完整，未删除旧预设：${error?.message || error}`);
+            }
+
+            let removed;
+            try {
+                removed = await manager.deletePreset(oldName);
+            } catch (error) {
+                ensurePresetOptionWithoutSelecting(oldName, storedPreset, oldIndex);
+                throw new Error('新预设已保存，但删除旧名称时失败；两个预设暂时都保留');
+            }
+            if (!removed) {
+                ensurePresetOptionWithoutSelecting(oldName, storedPreset, oldIndex);
+                throw new Error('新预设已保存，但旧名称未能删除；两个预设暂时都保留');
+            }
+            ensurePresetOptionWithoutSelecting(newName, original);
         }
 
-        let removed = false;
-        try {
-            removed = await manager.deletePreset(oldName);
-        } catch (error) {
-            ensurePresetOptionWithoutSelecting(oldName, storedPreset, oldIndex);
-            ensurePresetOptionWithoutSelecting(newName, preset);
-            throw new Error('新名称已保存，但删除旧名称时发生错误；为避免丢失，两个名称暂时都保留。');
-        }
-        if (!removed) {
-            ensurePresetOptionWithoutSelecting(oldName, storedPreset, oldIndex);
-            ensurePresetOptionWithoutSelecting(newName, preset);
-            throw new Error('新名称已保存，但旧名称删除失败；两个预设暂时都保留，没有覆盖原配置。');
-        }
-        ensurePresetOptionWithoutSelecting(newName, preset);
+        replacePresetReferencesInSettings(oldName, newName);
+        save(); refreshAll();
+        notify(`已将预设「${oldName}」重命名为「${newName}」`, 'success');
+    } catch (error) {
+        syncActive(); refreshAll();
+        throw error;
+    } finally {
+        ui.busy = false;
     }
-
-    replacePresetReferencesInSettings(oldName, newName);
-    save(); refreshAll();
-    notify(`已将预设「${oldName}」重命名为「${newName}」`, 'success');
 }
 function showPresetRenameDialog(name) {
     showTextEditDialog('重命名预设', name, '输入新的预设名称', async newName => {
@@ -1722,7 +1771,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    const version = text('small', 'v0.2.17', 'pg-footer-version');
+    const version = text('small', 'v0.2.18', 'pg-footer-version');
     foot.append(label, version); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
@@ -2223,7 +2272,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.17 已加载');
+    console.info('[预设分组] v0.2.18 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
