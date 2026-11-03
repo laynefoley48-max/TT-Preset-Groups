@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.15
+ * 预设分组 / Preset Groups v0.2.16
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -834,7 +834,12 @@ function renderQuick() {
         }
     });
     multiLabel.append(multiCheckbox, text('span', '多选'));
-    row.append(multiLabel);
+    const quickActions = text('div', '', 'pg-quick-actions');
+    const panelButton = htmlButton('打开面板', openPanel, 'pg-quick-open-panel');
+    panelButton.title = '打开预设分组独立面板';
+    panelButton.setAttribute('aria-label', '打开预设分组独立面板');
+    quickActions.append(multiLabel, panelButton);
+    row.append(quickActions);
     if (pageCount > 1) {
         const pageGroup = text('div', '', 'pg-quick-pages');
         pageGroup.append(text('small', '分组', 'pg-pagination-label'));
@@ -862,12 +867,41 @@ function renderQuick() {
         results.append(text('div', `筛选结果 · 共 ${names.length} 个预设`, 'pg-filter-label'));
         const list = text('div', '', 'pg-filter-list');
         for (const name of names) {
+            const entry = text('div', '', `pg-filter-entry${name === ui.activeName ? ' is-current' : ''}`);
             const button = htmlButton(name === ui.activeName ? '✓ ' + name : name, () => {
                 clearNewPreset(name); void switchTo(getValueByName(name));
             }, `pg-filter-preset${name === ui.activeName ? ' is-current' : ''}`);
             button.title = name;
-            if ((ui.data.newPresets || []).includes(name)) button.append(text('span', '新', 'pg-new-badge'));
-            list.append(button);
+            entry.append(button);
+            if ((ui.data.newPresets || []).includes(name)) entry.append(text('span', '新', 'pg-new-badge'));
+
+            // Action buttons are siblings of the switch button, never inside it.
+            // This prevents tapping a small icon from switching the preset.
+            const actions = text('div', '', 'pg-filter-actions');
+            const rename = htmlButton('', () => showPresetRenameDialog(name), 'pg-filter-icon pg-filter-rename');
+            rename.title = '重命名预设（不切换）';
+            rename.setAttribute('aria-label', `重命名预设：${name}`);
+            rename.disabled = String(getValueByName(name)) === 'gui';
+            if (rename.disabled) rename.title = '该预设不支持重命名';
+            const pencil = text('i', '', 'fa-solid fa-pen');
+            pencil.setAttribute('aria-hidden', 'true');
+            rename.append(pencil);
+
+            const group = htmlButton('', () => {
+                const sourceGroupId = ui.data.selectedGroups.length === 1 &&
+                    membersFor(name).includes(ui.data.selectedGroups[0])
+                    ? ui.data.selectedGroups[0] : null;
+                showGroupsEditor(name, sourceGroupId);
+            }, 'pg-filter-icon pg-filter-group');
+            group.title = '编辑所属分组';
+            group.setAttribute('aria-label', `编辑所属分组：${name}`);
+            const folder = text('i', '', 'fa-solid fa-folder');
+            folder.setAttribute('aria-hidden', 'true');
+            group.append(folder);
+
+            actions.append(rename, group);
+            entry.append(actions);
+            list.append(entry);
         }
         if (!names.length) list.append(text('p', '这个组合暂无预设，请去独立面板添加。', 'pg-muted'));
         results.append(list); ui.quick.append(results);
@@ -1324,7 +1358,6 @@ function makePresetRow(name, compact = false, groupId = null) {
     if (groupId !== null && groupId !== undefined) row.dataset.pgGroupId = String(groupId);
     if (ui.sortMode && groupId) {
         row.classList.add('pg-sortable-preset'); row.dataset.presetName = name; row.dataset.groupId = groupId;
-        row.append(makeDragHandle('preset', name, groupId));
     }
     const select = htmlButton((name === ui.activeName ? '✓ ' : '') + name, () => {
         if (ui.sortMode) return;
@@ -1345,6 +1378,7 @@ function makePresetRow(name, compact = false, groupId = null) {
         row.append(rename);
     }
     if (!compact) row.append(htmlButton('分组', () => showGroupsEditor(name, groupId), 'pg-row-assign'));
+    if (ui.sortMode && groupId) row.append(makeDragHandle('preset', name, groupId));
     return row;
 }
 function groupCard(group, list, headingRight = '') {
@@ -1356,7 +1390,6 @@ function groupCard(group, list, headingRight = '') {
     if (realGroup && ui.sortMode) { section.classList.add('pg-sortable-card'); section.dataset.groupId = group.id; }
     let collapsed = ui.data.collapsed[group.id] !== false;
     const top = text('div', '', 'pg-series-top');
-    if (realGroup && ui.sortMode) top.append(makeDragHandle('group', group.id));
     const orderedList = sortPresetNames(group.id, list);
     const makeBody = () => {
         const body = text('div', '', 'pg-series-body'); body.dataset.groupId = group.id;
@@ -1382,6 +1415,7 @@ function groupCard(group, list, headingRight = '') {
         edit.setAttribute('aria-label', `编辑分组名称：${group.name}`);
         top.append(edit);
     }
+    if (realGroup && ui.sortMode) top.append(makeDragHandle('group', group.id));
     section.append(top);
     if (!collapsed) section.append(makeBody());
     return section;
@@ -1549,11 +1583,13 @@ function showHelp() {
         '分组标题右侧的铅笔只修改显示名称；自动分组仍使用原始匹配依据，手动分组保留原有成员。'
     ]);
     addSection('4. 编辑与命名', [
+        '原生预设下方的九宫格提供「打开面板」按钮；筛选结果右侧的小铅笔可直接重命名，小文件夹可编辑所属分组，均不会切换预设。',
         '分组标题右侧的铅笔用于修改分组显示名称。',
         '预设条目右侧的铅笔用于重命名预设。重命名非当前预设时不会切换当前预设；重命名当前预设时保留正在使用的配置。',
         '重命名会同步更新收藏、分组成员、排序和自动分组匹配锚点。'
     ]);
     addSection('5. 亮点', [
+        ['右侧排序把手：', '在独立面板开启排序后，拖动分组标题或预设条目最右侧的把手调整顺序。'],
         ['安全切换：', '切换前自动检查当前预设是否存在未保存的修改，可选择保存后切换、不保存直接切换或取消操作。'],
         ['智能归类：', '自动识别相似预设系列，减少手动整理工作。'],
         ['灵活分组：', '支持自定义分组，一个预设可同时归属于多个分组。'],
@@ -1679,7 +1715,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    const version = text('small', 'v0.2.15', 'pg-footer-version');
+    const version = text('small', 'v0.2.16', 'pg-footer-version');
     foot.append(label, version); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
@@ -2180,7 +2216,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.15 已加载');
+    console.info('[预设分组] v0.2.16 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
