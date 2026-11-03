@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.18
+ * 预设分组 / Preset Groups v0.2.19
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -1311,11 +1311,35 @@ async function renamePresetWithoutSwitching(oldName, newName) {
     ui.busy = true;
     try {
         if (activeName === oldName) {
-            if (typeof manager.renamePreset !== 'function') {
-                throw new Error('当前 TT 版本没有提供安全的当前预设重命名接口');
+            // PresetManager.renamePreset() alone is NOT the native rename flow.
+            // The native UI emits before/after events around the transaction,
+            // copies all extensions, then persists the restored live preset.
+            // BaiBai uses these events to stash and restore prompt groups.
+            const events = ui.ctx?.eventSource;
+            const types = ui.ctx?.event_types;
+            if (typeof manager.renamePreset !== 'function' ||
+                typeof manager.readPresetExtensionField !== 'function' ||
+                typeof manager.writePresetExtensionField !== 'function' ||
+                typeof events?.emit !== 'function' ||
+                !types?.PRESET_RENAMED_BEFORE || !types?.PRESET_RENAMED) {
+                throw new Error('当前 TT 缺少安全原生重命名接口，已取消改名以保护分组');
             }
-            // Keep the existing current-preset rename route unchanged.
+            const event = { apiId: 'openai', oldName, newName };
+            await events.emit(types.PRESET_RENAMED_BEFORE, event);
+            const extensions = manager.readPresetExtensionField({ name: oldName, path: '' });
+            if (!extensions || typeof extensions !== 'object' || Array.isArray(extensions)) {
+                throw new Error('无法读取当前预设的扩展字段，已取消重命名');
+            }
             await manager.renamePreset(newName);
+            await manager.writePresetExtensionField({
+                name: newName, path: '', value: clonePresetSnapshot(extensions),
+            });
+            await events.emit(types.PRESET_RENAMED, event);
+            // Native Chat Completion rename also triggers this final save
+            // AFTER extensions have been restored by other plugins.
+            const nativeSave = $id('update_oai_preset');
+            if (nativeSave) nativeSave.click();
+            else console.warn('[预设分组] 未找到原生预设保存按钮，建议手动保存改名后的预设');
         } else {
             // The native rename UI explicitly copies the FULL extensions object.
             // savePreset(skipUpdate) by itself is not a compatible rename: it
@@ -1771,7 +1795,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    const version = text('small', 'v0.2.18', 'pg-footer-version');
+    const version = text('small', 'v0.2.19', 'pg-footer-version');
     foot.append(label, version); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
@@ -2272,7 +2296,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.18 已加载');
+    console.info('[预设分组] v0.2.19 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
