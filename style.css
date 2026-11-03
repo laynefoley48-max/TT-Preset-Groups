@@ -699,3 +699,12 @@
   flex:0 0 24px; width:24px; min-width:24px; min-height:29px;
   margin:0 3px 0 0; padding:3px 0;
 }
+
+/* v0.2.18: show complete preset names, including the version suffix. */
+#pg-quick .pg-filter-entry .pg-filter-preset {
+  min-height:35px; height:auto; max-height:none; white-space:normal !important;
+  overflow-wrap:anywhere; word-break:break-word; overflow:visible;
+  text-overflow:clip; line-height:1.5; text-align:left;
+}
+#pg-quick .pg-filter-entry { height:auto; align-items:center; }
+#pg-quick .pg-filter-list { max-height:min(220px, 30dvh); }
