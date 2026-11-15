@@ -1,5 +1,5 @@
 /**
- * 预设分组 / Preset Groups v0.2.19
+ * 预设分组 / Preset Groups v0.2.20
  * Browser-only extension for SillyTavern / TauriTavern.
  * Never mutates or deletes a source preset during categorization/filtering.
  */
@@ -1611,7 +1611,9 @@ function showGroupMemberPicker(group) {
 
         save(); scrim.remove(); refreshAll();
     }, 'pg-primary'));
-    dialog.append(actions); scrim.append(dialog);
+    // The picker must be mounted like every other modal; previously it only
+    // existed in memory, so both the new-group flow and "选择预设" appeared inert.
+    dialog.append(actions); scrim.append(dialog); appendOverlay(scrim);
     scrim.addEventListener('click', event => {
         if (event.target === scrim) scrim.remove();
     });
@@ -1795,7 +1797,7 @@ function renderPanel() {
     checked.addEventListener('change', () => { ui.data.protection = checked.checked; save(); });
     const label = text('label', '', 'pg-protect');
     label.append(checked, text('span', '切换前检查未保存修改'));
-    const version = text('small', 'v0.2.19', 'pg-footer-version');
+    const version = text('small', 'v0.2.20', 'pg-footer-version');
     foot.append(label, version); win.append(foot);
     renderPanelContent(scrollAnchor);
     applyTheme();
@@ -2296,7 +2298,7 @@ async function init() {
             }
         }
     }, 2200);
-    console.info('[预设分组] v0.2.19 已加载');
+    console.info('[预设分组] v0.2.20 已加载');
 }
 // ST's startup has finished by the time most third-party entrypoints run.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
